@@ -1,9 +1,9 @@
 #!/bin/bash
-# Liberty Laundry deploy. Run on the server from /opt/liberty-laundry-game:  ./deploy.sh
+# Liberty Laundry deploy. Run on the server from /opt/games/libertylaundry:  ./deploy.sh
 set -e
 
-APP_DIR=/opt/liberty-laundry-game
-SERVICE=liberty-laundry-game
+APP_DIR=/opt/games/libertylaundry
+SERVICE=libertylaundry
 PORT=8091
 
 cd "$APP_DIR"
