@@ -1,0 +1,9 @@
+{
+	"name": "Liberty Laundry Controller",
+	"short_name": "Liberty Laundry",
+	"start_url": "pad.html",
+	"display": "fullscreen",
+	"orientation": "landscape",
+	"background_color": "#112233",
+	"theme_color": "#112233"
+}

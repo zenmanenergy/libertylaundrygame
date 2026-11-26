@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#123">
+<link rel="manifest" href="manifest.webmanifest">
+<title>Liberty Laundry Controller</title>
+<link rel="stylesheet" href="css/pad.css">
+</head>
+<body>
+<div id="join" class="screen">
+	<h1>Liberty Laundry</h1>
+	<p>Type the code on the TV</p>
+	<input id="codeInput" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD">
+	<button id="joinBtn">Join</button>
+	<p id="joinMsg"></p>
+</div>
+
+<div id="pad" class="screen hidden">
+	<div id="stick" class="zone">
+		<div id="stickBase"><div id="stickKnob"></div></div>
+		<div class="hint">slide to move</div>
+	</div>
+	<div id="mid">
+		<div id="who"><span id="dot"></span><span id="name">Connecting...</span></div>
+		<div id="status">Eyes on the TV!</div>
+		<div id="lives"></div>
+		<div id="score"></div>
+		<div id="tools">
+			<button id="fsBtn" class="small hidden">Fullscreen</button>
+		</div>
+		<div id="iosHint" class="hidden">For fullscreen on iPhone: Share, then Add to Home Screen</div>
+	</div>
+	<div id="buttons" class="zone">
+		<button id="fireBtn" class="act">BUBBLE</button>
+		<button id="jumpBtn" class="act">JUMP</button>
+	</div>
+</div>
+
+<div id="rotate" class="hidden">Turn your phone sideways</div>
+
+<script src="js/pad.js"></script>
+</body>
+</html>

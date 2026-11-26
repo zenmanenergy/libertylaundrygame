@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Liberty Laundry</title>
+<script>
+	// phones that open /?pad=CODE go straight to the controller
+	(function () {
+		// /libertylaundry without the slash would break the relative file paths
+		if (!/\/$|\.html$/.test(location.pathname)) {
+			location.replace(location.pathname + '/' + location.search);
+			return;
+		}
+		var p = new URLSearchParams(location.search).get('pad');
+		if (p) location.replace('pad.html?room=' + encodeURIComponent(p));
+	})();
+</script>
+<link rel="stylesheet" href="css/tv.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+<script src="js/qr.js"></script>
+<script src="js/assets.js"></script>
+<script src="js/level1.js"></script>
+<script src="js/sound.js"></script>
+<script src="js/net.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
