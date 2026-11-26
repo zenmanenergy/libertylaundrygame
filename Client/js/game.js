@@ -979,6 +979,7 @@
 				p.connected = true;
 				p.awayT = 0;
 				p.padMsg = '';
+				p.inSeq = null;
 				return;
 			}
 		}
@@ -1007,6 +1008,11 @@
 		const slot = G.padSlot.get(id);
 		const p = slot != null ? G.players[slot] : null;
 		if (!p || !m || m.t !== 'i') return;
+		// the same press can arrive twice (direct link and server); keep the newest
+		if (m.s != null) {
+			if (p.inSeq != null && m.s <= p.inSeq) return;
+			p.inSeq = m.s;
+		}
 		p.input = { l: m.l ? 1 : 0, r: m.r ? 1 : 0, d: m.d ? 1 : 0, j: m.j ? 1 : 0, f: m.f ? 1 : 0 };
 	};
 
@@ -1478,7 +1484,7 @@
 		ctx.globalAlpha = any ? pulse : 0.7;
 		outlineText(any ? 'Press JUMP on a phone (or Enter here) to start' : 'Waiting for players...', W / 2, 490, 22, '#fff');
 		ctx.globalAlpha = 1;
-		if (!SU.audioReady()) outlineText('Click or press any key on this screen to turn on sound', W / 2, 530, 13, '#9ab');
+		outlineText((SU.audioReady() ? '' : 'Click or press any key on this screen to turn on sound   |   ') + 'F: full screen on/off', W / 2, 530, 13, '#9ab');
 	}
 
 	function drawBanner() {
@@ -1569,18 +1575,34 @@
 		SU.audioStart();
 		if (G.mode === 'lobby' && G.players.some(function (p) { return p; })) startGame();
 	}
+	// Full screen: the first click on the page goes full screen once. After that
+	// it never forces it again, so Esc always gets you out. F toggles it.
+	let triedFullscreen = false;
+	function enterFullscreen() {
+		if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
+			document.documentElement.requestFullscreen().catch(function () {});
+		}
+	}
+	function toggleFullscreen() {
+		if (document.fullscreenElement) {
+			if (document.exitFullscreen) document.exitFullscreen().catch(function () {});
+		} else {
+			enterFullscreen();
+		}
+	}
 	window.addEventListener('keydown', function (e) {
 		SU.audioStart();
 		if (e.key === 'Enter') unlock();
-		if (e.key === 'f' || e.key === 'F') {
-			if (!document.fullscreenElement && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(function () {});
-		}
+		if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.altKey && !e.metaKey) toggleFullscreen();
 		devKey(e, 1);
 	});
 	window.addEventListener('keyup', function (e) { devKey(e, 0); });
 	window.addEventListener('pointerdown', function () {
 		SU.audioStart();
-		if (!document.fullscreenElement && document.documentElement.requestFullscreen) document.documentElement.requestFullscreen().catch(function () {});
+		if (!triedFullscreen) {
+			triedFullscreen = true;
+			enterFullscreen();
+		}
 	});
 
 	// ?keys=1 adds two keyboard players on the TV for testing without phones:

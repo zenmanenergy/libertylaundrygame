@@ -44,7 +44,7 @@ function check(ok, what) { console.log((ok ? 'PASS ' : 'FAIL ') + what); if (!ok
 	const srv = spawn('node', [path.join(__dirname, '..', 'Server', 'server.js')], { env: { ...process.env, PORT: String(PORT) } });
 	const proxy = PREFIX ? startPrefixProxy() : null;
 	await sleep(500);
-	const browser = await chromium.launch({ executablePath: process.env.CHROME || '/usr/bin/google-chrome', args: ['--autoplay-policy=no-user-gesture-required'] });
+	const browser = await chromium.launch({ executablePath: process.env.CHROME || '/usr/bin/google-chrome', args: ['--autoplay-policy=no-user-gesture-required', '--disable-features=WebRtcHideLocalIpsWithMdns'] });
 	const errors = [];
 	const tvCtx = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
 	const tv = await tvCtx.newPage();
@@ -88,6 +88,14 @@ function check(ok, what) { console.log((ok ? 'PASS ' : 'FAIL ') + what); if (!ok
 	check(mode === 'play', 'JUMP on phone starts the game (' + mode + ')');
 	const alive = await tv.evaluate(() => SU.G.players.filter(p => p && p.state === 'alive').length);
 	check(alive === 2, 'both players spawned (' + alive + ')');
+
+	// phones open a direct WebRTC link to the TV and show the lag
+	await tv.waitForFunction(() => Object.keys(SU.net.peers).length === 2 && Object.keys(SU.net.peers).every(id => SU.net.direct(id)), null, { timeout: 10000 }).catch(() => {});
+	const direct = await tv.evaluate(() => Object.keys(SU.net.peers).filter(id => SU.net.direct(id)).length);
+	check(direct === 2, 'both phones have a direct link to the TV (' + direct + ')');
+	await sleep(2500);
+	const lagText = await pads[0].evaluate(() => document.getElementById('link').textContent);
+	check(/Direct to TV: \d+ ms/.test(lagText), 'phone shows the lag (' + lagText + ')');
 
 	// stick: drag right on phone 2 and check the player moves right
 	const x0 = await tv.evaluate(() => SU.G.players[1].x);
@@ -223,9 +231,12 @@ function check(ok, what) { console.log((ok ? 'PASS ' : 'FAIL ') + what); if (!ok
 	// bubble another player: they float to the top and pop out
 	const ride = await tv.evaluate(async () => {
 		const G = SU.G, a = G.players[0], b = G.players[1];
-		await new Promise(r => setTimeout(r, 900));
+		// keep the lint bunnies harmless and undo any hit from the earlier tests
 		G.enemies.forEach(e => { e.spawnT = 99; });
-		a.inv = 99; b.inv = 0;
+		a.inv = 99; b.inv = 99;
+		[a, b].forEach(p => { p.state = 'alive'; p.lives = 3; });
+		await new Promise(r => setTimeout(r, 900));
+		b.inv = 0;
 		a.x = 8 * 32; a.y = 17 * 32 - a.h; a.vy = 0; a.dir = 1;
 		b.x = a.x + 70; b.y = a.y; b.vy = 0;
 		b.input = { l: 0, r: 0, j: 0, f: 0 };

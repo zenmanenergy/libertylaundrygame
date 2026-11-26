@@ -18,6 +18,9 @@
 	let ws = null;
 	let retry = 0;
 	let gaveUp = false;
+	let joined = false;
+	// every input message gets a bigger number, so the TV can drop old copies
+	let seq = Date.now();
 
 	// ---------- connection ----------
 
@@ -42,6 +45,8 @@
 		};
 		ws.onclose = function () {
 			ws = null;
+			joined = false;
+			closeRtc();
 			if (gaveUp) return;
 			$('status').textContent = 'Reconnecting...';
 			retry++;
@@ -54,11 +59,18 @@
 			gaveUp = true;
 			showJoin('No game with code ' + room + '. Check the TV.');
 		} else if (m.t === 'joined') {
+			joined = true;
+			closeRtc();
 			showPad();
 			$('status').textContent = m.host ? 'Eyes on the TV!' : 'Waiting for the TV...';
 			try { history.replaceState(null, '', 'pad.html?room=' + room); } catch (e) {}
 		} else if (m.t === 'hostgone') {
+			closeRtc();
 			$('status').textContent = 'TV disconnected. Waiting...';
+		} else if (m.t === 'sig') {
+			onSignal(m);
+		} else if (m.t === 'pong') {
+			onPong(m);
 		} else if (m.t === 'kicked') {
 			gaveUp = true;
 			showJoin(m.why || 'The game is full.');
@@ -77,10 +89,97 @@
 		if (!ws || ws.readyState !== 1) return;
 		const s = JSON.stringify({ t: 'i', l: input.l, r: input.r, d: input.d, j: input.j, f: input.f });
 		if (force || s !== lastSent) {
-			ws.send(s);
 			lastSent = s;
+			seq++;
+			const msg = JSON.stringify({ t: 'i', l: input.l, r: input.r, d: input.d, j: input.j, f: input.f, s: seq });
+			if (dcOpen()) dc.send(msg);
+			ws.send(msg);
 		}
 	}
+
+	// ---------- direct link to the TV (WebRTC) ----------
+	// Skips the trip to the server when the phone and TV are on the same
+	// network. If it can't connect, everything still goes through the server.
+
+	let pc = null;
+	let dc = null;
+	let rtcReady = null;
+	let rtcStarted = 0;
+
+	function dcOpen() {
+		return !!(dc && dc.readyState === 'open');
+	}
+
+	function wsSend(obj) {
+		if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+	}
+
+	function closeRtc() {
+		if (pc) {
+			try { pc.close(); } catch (e) {}
+		}
+		pc = null;
+		dc = null;
+	}
+
+	function startRtc() {
+		if (typeof RTCPeerConnection === 'undefined') return;
+		closeRtc();
+		rtcStarted = Date.now();
+		pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+		const myPc = pc;
+		// unordered with no resends: a late button press is useless, the next one replaces it
+		dc = pc.createDataChannel('in', { ordered: false, maxRetransmits: 0 });
+		dc.onopen = function () { send(true); };
+		dc.onmessage = function (ev) {
+			let m;
+			try { m = JSON.parse(ev.data); } catch (e) { return; }
+			handle(m);
+		};
+		pc.onicecandidate = function (e) {
+			if (e.candidate && pc === myPc) wsSend({ t: 'sig', c: e.candidate });
+		};
+		rtcReady = pc.createOffer()
+			.then(function (o) { return myPc.setLocalDescription(o); })
+			.then(function () { wsSend({ t: 'sig', sdp: myPc.localDescription }); })
+			.catch(function () {});
+	}
+
+	function onSignal(m) {
+		if (!pc) return;
+		const myPc = pc;
+		if (m.sdp && m.sdp.type === 'answer') {
+			rtcReady = rtcReady.then(function () { return myPc.setRemoteDescription(m.sdp); }).catch(function () {});
+		} else if (m.c) {
+			rtcReady = rtcReady.then(function () { return myPc.addIceCandidate(m.c); }).catch(function () {});
+		}
+	}
+
+	// try (again) every few seconds until the direct link is up
+	setInterval(function () {
+		if (!joined || !ws || ws.readyState !== 1 || dcOpen()) return;
+		if (Date.now() - rtcStarted > 6000) startRtc();
+	}, 1000);
+
+	// ---------- lag readout ----------
+	// pings the TV both ways once a second and shows how long the faster one takes
+
+	const lag = { d: null, w: null };
+	function onPong(m) {
+		const ms = Math.round(performance.now() - m.ts);
+		lag[m.v] = lag[m.v] == null ? ms : Math.round(lag[m.v] * 0.6 + ms * 0.4);
+	}
+	setInterval(function () {
+		const now = performance.now();
+		if (dcOpen()) dc.send(JSON.stringify({ t: 'ping', ts: now, v: 'd' }));
+		else lag.d = null;
+		wsSend({ t: 'ping', ts: now, v: 'w' });
+		let text = '';
+		if (lag.d != null) text = 'Direct to TV: ' + lag.d + ' ms';
+		else if (lag.w != null) text = 'Through server: ' + lag.w + ' ms';
+		if (lag.d != null && lag.w != null) text += ' (server: ' + lag.w + ' ms)';
+		$('link').textContent = text;
+	}, 1000);
 	setInterval(function () { send(true); }, 200);
 
 	// ---------- screens ----------
@@ -124,7 +223,20 @@
 	let oy = 0;
 	const DEAD = 14;
 	const DOWN = 28;
-	const MAXR = 50;
+	let MAXR = 50;
+
+	// size the circle to fill the left side of the screen
+	function sizeStick() {
+		const r = stick.getBoundingClientRect();
+		const baseSize = Math.max(150, Math.min(r.width, r.height - 30) * 0.92);
+		const knobSize = Math.round(baseSize * 0.4);
+		stick.style.setProperty('--base', Math.round(baseSize) + 'px');
+		stick.style.setProperty('--knob', knobSize + 'px');
+		MAXR = Math.round((baseSize - knobSize) / 2);
+	}
+	window.addEventListener('resize', sizeStick);
+	window.addEventListener('orientationchange', function () { setTimeout(sizeStick, 300); });
+	new ResizeObserver(sizeStick).observe(stick);
 
 	function stickSet(dx, dy) {
 		const d = Math.hypot(dx, dy);
@@ -147,6 +259,8 @@
 		const rect = stick.getBoundingClientRect();
 		ox = e.clientX;
 		oy = e.clientY;
+		// the circle jumps to wherever the thumb lands, so you never have to aim for it
+		base.classList.add('held');
 		base.style.left = (e.clientX - rect.left) + 'px';
 		base.style.top = (e.clientY - rect.top) + 'px';
 		stickSet(0, 0);
@@ -160,6 +274,10 @@
 		if (e.pointerId !== stickId) return;
 		stickId = null;
 		stickSet(0, 0);
+		// let go and the circle glides back to the middle
+		base.classList.remove('held');
+		base.style.left = '';
+		base.style.top = '';
 	}
 	stick.addEventListener('pointerup', stickEnd);
 	stick.addEventListener('pointercancel', stickEnd);

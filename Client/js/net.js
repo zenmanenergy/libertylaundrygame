@@ -12,7 +12,76 @@
 		onJoin: null,
 		onLeave: null,
 		onInput: null,
-		ws: null
+		ws: null,
+		peers: {}
+	};
+
+	// ---------- direct link to each phone ----------
+	// The server is far away (out over the internet and back). When the phone
+	// and TV are on the same network they can also talk directly with WebRTC,
+	// which skips the server. The phone starts it; the server only passes the
+	// setup messages. Button presses go both ways at once, whichever arrives
+	// first wins (they carry a sequence number), so nothing breaks if the
+	// direct link can't be made.
+	const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+
+	function closePeer(id) {
+		const peer = net.peers[id];
+		if (!peer) return;
+		try { peer.pc.close(); } catch (e) {}
+		delete net.peers[id];
+	}
+
+	function fromPhone(id, m, dc) {
+		if (!m) return;
+		if (m.t === 'ping') {
+			const pong = { t: 'pong', ts: m.ts, v: m.v };
+			if (dc) {
+				if (dc.readyState === 'open') dc.send(JSON.stringify(pong));
+			} else {
+				net.to(id, pong);
+			}
+		} else if (m.t === 'sig') {
+			onSignal(id, m);
+		} else if (net.onInput) {
+			net.onInput(id, m);
+		}
+	}
+
+	function onSignal(id, m) {
+		if (typeof RTCPeerConnection === 'undefined') return;
+		if (m.sdp && m.sdp.type === 'offer') {
+			closePeer(id);
+			const pc = new RTCPeerConnection(RTC_CONFIG);
+			const peer = { pc: pc, dc: null };
+			net.peers[id] = peer;
+			pc.onicecandidate = function (e) {
+				if (e.candidate) net.to(id, { t: 'sig', c: e.candidate });
+			};
+			pc.ondatachannel = function (e) {
+				peer.dc = e.channel;
+				peer.dc.onmessage = function (ev) {
+					let msg;
+					try { msg = JSON.parse(ev.data); } catch (err) { return; }
+					fromPhone(id, msg, peer.dc);
+				};
+			};
+			peer.ready = pc.setRemoteDescription(m.sdp)
+				.then(function () { return pc.createAnswer(); })
+				.then(function (a) { return pc.setLocalDescription(a); })
+				.then(function () { net.to(id, { t: 'sig', sdp: pc.localDescription }); })
+				.catch(function () { closePeer(id); });
+		} else if (m.c) {
+			const peer = net.peers[id];
+			if (peer) {
+				peer.ready = peer.ready.then(function () { return peer.pc.addIceCandidate(m.c); }).catch(function () {});
+			}
+		}
+	}
+
+	net.direct = function (id) {
+		const peer = net.peers[id];
+		return !!(peer && peer.dc && peer.dc.readyState === 'open');
 	};
 
 	let retry = 0;
@@ -36,9 +105,10 @@
 			} else if (m.t === 'join') {
 				if (net.onJoin) net.onJoin(m.id);
 			} else if (m.t === 'leave') {
+				closePeer(m.id);
 				if (net.onLeave) net.onLeave(m.id);
 			} else if (m.t === 'in') {
-				if (net.onInput) net.onInput(m.id, m.m);
+				fromPhone(m.id, m.m, null);
 			}
 		};
 		ws.onclose = function () {
@@ -53,7 +123,15 @@
 		if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(obj));
 	}
 
-	net.to = function (id, msg) { raw({ t: 'to', id: id, m: msg }); };
+	net.to = function (id, msg) {
+		// rumbles go the fast way when there is one
+		const peer = net.peers[id];
+		if (msg.t === 'buzz' && peer && peer.dc && peer.dc.readyState === 'open') {
+			peer.dc.send(JSON.stringify(msg));
+			return;
+		}
+		raw({ t: 'to', id: id, m: msg });
+	};
 	net.all = function (msg) { raw({ t: 'all', m: msg }); };
 	net.kick = function (id, why) { raw({ t: 'kick', id: id, why: why }); };
 	net.start = connect;

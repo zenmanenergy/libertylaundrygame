@@ -42,8 +42,19 @@ One Node process (Server/server.js, no npm packages) serves the Client folder an
 
 - TV connects to /ws?role=host and gets {t:'room', code}. It saves the code for the browser tab, so a reload keeps the same code.
 - Phone connects to /ws?role=pad&room=CODE&id=ID. The id lives in the phone's localStorage, so a phone that reloads or loses signal gets its player back. A player whose phone is gone for 30 seconds is removed.
-- Phone to TV: {t:'i', l, r, j, f}, sent on every change and repeated every 200 ms.
+- Phone to TV: {t:'i', l, r, d, j, f, s}, sent on every change and repeated every 200 ms. s is a sequence number that always goes up.
 - TV to phone: {t:'you', name, color, status, lives, score} and {t:'buzz', ms}.
+
+### Direct link (WebRTC)
+
+Going through the server means every button press travels out over the internet and back, even with the phone and TV in the same room. So once a phone has joined, it also opens a direct WebRTC data channel to the TV:
+
+- The phone makes the offer. The offer, answer and ICE candidates travel through the normal WebSocket as {t:'sig', sdp} and {t:'sig', c}, so the server needs nothing new.
+- The channel is unordered with no resends, because a late button press is useless and the next one replaces it.
+- Every input is sent on both paths. The TV keeps whichever copy arrives first and ignores anything with an older sequence number.
+- Rumbles (buzz) go over the direct link when it is up.
+- If the direct link can't be made (different networks, a guest Wi-Fi that keeps devices apart), the phone keeps retrying every 6 seconds and everything still works through the server.
+- Once a second the phone pings the TV both ways ({t:'ping', ts, v} answered with {t:'pong', ts, v}) and shows the round trip time under the score, for example "Direct to TV: 12 ms (server: 140 ms)".
 
 ## Testing on one computer
 
