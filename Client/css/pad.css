@@ -212,3 +212,17 @@ button.act.down {
 	padding: 20px;
 	z-index: 10;
 }
+
+#brand {
+	font-size: 20px;
+	font-weight: bold;
+	letter-spacing: 1px;
+}
+
+.r {
+	color: #ff5a5a;
+}
+
+.b {
+	color: #6fb6ff;
+}

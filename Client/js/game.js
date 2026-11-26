@@ -867,7 +867,10 @@
 		g.addColorStop(1, '#0a2233');
 		ctx.fillStyle = g;
 		ctx.fillRect(0, 0, W, H);
-		// placeholder laundromat: faint rows of front-loading washers
+		// placeholder laundromat: a store sign and faint rows of front-loading washers
+		ctx.globalAlpha = 0.16;
+		drawBrand(W / 2, 100, 44);
+		ctx.globalAlpha = 1;
 		ctx.strokeStyle = 'rgba(255,255,255,0.06)';
 		ctx.lineWidth = 3;
 		for (let row = 0; row < 2; row++) {
@@ -1131,20 +1134,25 @@
 			}
 		});
 		if (G.mode !== 'lobby') {
-			outlineText('ROUND ' + G.round, W / 2, 12, 12, '#cfe');
-			if (SU.net.code) outlineText('join: ' + SU.net.code, W / 2, 26, 11, '#9ef');
+			drawBrand(W / 2, 12, 17);
+			outlineText('ROUND ' + G.round + (SU.net.code ? '   join: ' + SU.net.code : ''), W / 2, 28, 10, '#cfe');
 		}
+	}
+
+	// "LIBERTY" in red, "LAUNDRY" in blue, centered on x
+	function drawBrand(x, y, size) {
+		ctx.font = 'bold ' + size + 'px "Trebuchet MS", Verdana, sans-serif';
+		const w1 = ctx.measureText('LIBERTY ').width;
+		const w2 = ctx.measureText('LAUNDRY').width;
+		const lx = x - (w1 + w2) / 2;
+		outlineText('LIBERTY', lx, y, size, '#ff5a5a', 'left');
+		outlineText('LAUNDRY', lx + w1, y, size, '#6fb6ff', 'left');
 	}
 
 	function drawLobby() {
 		ctx.fillStyle = 'rgba(5,20,30,0.82)';
 		ctx.fillRect(0, 0, W, H);
-		ctx.font = 'bold 56px "Trebuchet MS", Verdana, sans-serif';
-		const w1 = ctx.measureText('LIBERTY ').width;
-		const w2 = ctx.measureText('LAUNDRY').width;
-		const lx = W / 2 - (w1 + w2) / 2;
-		outlineText('LIBERTY', lx, 70, 56, '#ff5a5a', 'left');
-		outlineText('LAUNDRY', lx + w1, 70, 56, '#6fb6ff', 'left');
+		drawBrand(W / 2, 70, 56);
 		outlineText('Trap the lint bunnies in soap bubbles, then pop them!', W / 2, 115, 18, '#fff');
 
 		const qx = 150;
