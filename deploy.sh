@@ -1,8 +1,9 @@
 #!/bin/bash
-# Liberty Laundry deploy. Run on the server from /opt/games/libertylaundry:  ./deploy.sh
+# Liberty Laundry deploy. Run on the server:  ./deploy.sh
+# Works from wherever the repo is cloned (normally /opt/games/libertylaundry).
 set -e
 
-APP_DIR=/opt/games/libertylaundry
+APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE=libertylaundry
 PORT=8091
 
