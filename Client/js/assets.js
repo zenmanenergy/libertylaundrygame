@@ -44,9 +44,16 @@
 
 		// level
 		tile_wall: S('assets/tiles/wall.png', 1, 1),
-		tile_platform: S('assets/tiles/platform.png', 1, 1),
-		background: S('assets/backgrounds/level1.png', 1, 1, 1024, 576, 1024)
+		tile_platform: S('assets/tiles/platform.png', 1, 1)
 	};
+
+	// per-level art, all optional: a background for each level, and wall or
+	// platform tiles that replace the shared ones on that level only
+	for (let n = 1; n <= 10; n++) {
+		SU.SPRITES['bg_' + n] = S('assets/backgrounds/level' + n + '.png', 1, 1, 1024, 576, 1024);
+		SU.SPRITES['wall_' + n] = S('assets/tiles/wall' + n + '.png', 1, 1);
+		SU.SPRITES['platform_' + n] = S('assets/tiles/platform' + n + '.png', 1, 1);
+	}
 
 	SU.images = {};
 

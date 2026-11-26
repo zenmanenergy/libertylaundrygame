@@ -9,12 +9,18 @@ Liberty Laundry is an original single-screen platformer, branded for the Liberty
 - Bubbles float up and drift along the ceiling.
 - Touch a bubble to pop it. Popping a trapped lint bunny flings it, and it lands as a treat worth points.
 - Bubbles touching each other pop together. Popping several trapped lint bunnies at once is a combo: 1000, 3000, 7000 and so on, and the treats are worth more.
-- Land on a bubble while holding JUMP to bounce off it instead of popping it. This is how you reach high places.
+- Land on top of a bubble and you stand on it, but your weight pops it after about half a second. Keep jumping (hold JUMP) and it holds you up, so you can ride it as it rises. A bubble squashed against the ceiling with you on it pops. Touching a bubble from the side or below pops it, except your own bubble in its first 0.6 seconds, so you can blow one against a wall, jump past it and land on top.
+- Pull the stick down and press JUMP to drop through the platform you're standing on. Hold both to keep dropping level after level. The floor can't be dropped through.
+- Every jump is full height, however briefly JUMP is pressed (phone lag makes hold time unreliable). Holding JUMP keeps jumping: you jump again the moment you land.
+- A bubble that hits another player traps them. They can't move, the bubble rises quickly and pops when it reaches the ceiling, dropping them out at the top. It's a way to get someone up high without jumping. Anyone else who touches the bubble on the way up pops it early. A freshly trapped player can't be popped for half a second, and players are safe from enemies for a second after popping out.
 - A trapped lint bunny escapes after 7 seconds (the bubble flashes red for the last 2) and comes out angry and faster.
 - Platforms can be jumped through from below. Fall through the gap in the floor and you drop in from the gap in the ceiling.
 - After 60 seconds, "HURRY UP!" makes every lint bunny angry.
 - Touching a free lint bunny costs a life. Everyone starts with 3.
-- Clear every lint bunny and the round ends: "SPARKLING CLEAN!", then the next round starts on the same level.
+- Clear every lint bunny and the level ends: "SPARKLING CLEAN!", leftover bubbles pop, and the players stop and float in place.
+- Then the level slides down off the bottom of the screen while the next level slides down from the top to replace it (about 2.6 seconds). The players float to their start spots on the new level during the slide, since where they were could be inside a wall on the new level.
+- There are 10 levels. After level 10 the layouts start over from level 1, but the level number keeps counting up.
+- Players who join during the clear or the slide drop in when the new level starts.
 - If everyone is out of lives, it's game over and back to the lobby. A player who runs out while others are still playing can press JUMP to come back with fresh lives and a score of 0.
 
 ## Screens
@@ -25,7 +31,7 @@ Liberty Laundry is an original single-screen platformer, branded for the Liberty
 
 ## Level format
 
-Levels are text maps in Client/js/levelN.js, 32 columns by 18 rows:
+All 10 levels are text maps in Client/js/levels.js, 32 columns by 18 rows each, with a name and a hurryAfter time in seconds:
 
 - # wall, = platform you can jump through, . empty
 - 1 to 4 player start points, e lint bunny start points
@@ -43,7 +49,7 @@ One Node process (Server/server.js, no npm packages) serves the Client folder an
 
 Open the TV page with ?keys=1 to add two keyboard players: A/D/W/S for one, the arrow keys for the other (Up jumps, Down blows a bubble). Phones still work at the same time.
 
-test/play.js runs the TV and two phones in headless Chrome and checks joining, moving, trapping, popping, the round clear, reconnecting and game over.
+test/play.js runs the TV and two phones in headless Chrome and checks joining, moving, trapping, popping, the level clear and slide to level 2, reconnecting and game over.
 
 ## Next steps (not built)
 

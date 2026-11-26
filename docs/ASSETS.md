@@ -40,11 +40,13 @@ Players 3 and 4: if p3_*.png and p4_*.png don't exist (they aren't in the list y
 |---|---|---|
 | assets/tiles/wall.png | 32 x 32 | Solid wall, ceiling and floor. Should tile seamlessly. Also used to fill the edges on screens that aren't 16:9. |
 | assets/tiles/platform.png | 32 x 32 | Platforms you can jump up through. Should tile seamlessly side to side. |
-| assets/backgrounds/level1.png | 1024 x 576 | Behind everything. Keep it darker and calmer than the characters so they stand out. |
+| assets/backgrounds/level1.png to level10.png | 1024 x 576 | One per level, behind everything. Keep them darker and calmer than the characters so they stand out. A level with no background gets a colored placeholder. |
+| assets/tiles/wall1.png to wall10.png | 32 x 32 | Optional. Replaces wall.png on that level only, so each level can have its own look. |
+| assets/tiles/platform1.png to platform10.png | 32 x 32 | Optional. Replaces platform.png on that level only. |
 
 ## Sound (optional)
 
-The game makes beeps on its own. To replace one, put an .mp3 in assets/sounds with one of these names: jump, blow, trap, pop, splat, treat, hurt, clear, hurry, join, start.
+The game makes beeps on its own. To replace one, put an .mp3 in assets/sounds with one of these names: jump, blow, trap, pop, splat, treat, hurt, clear, hurry, join, start, whoosh (the level slide).
 
 ## PixelLab and Meshy tips
 

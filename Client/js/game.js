@@ -13,7 +13,6 @@
 
 	const GRAV = 1700;
 	const JUMP_V = -640;
-	const JUMP_CUT = -260;
 	const MAX_FALL = 380;
 	const P_SPEED = 165;
 	const E_SPEED = 70;
@@ -25,6 +24,10 @@
 	const EMPTY_LIFE = 9;
 	const TRAP_LIFE = 7;
 	const CEIL_Y = T + 4;
+	const PLAYER_BUBBLE_R = 21;
+	// how long you can stand on a bubble before your weight pops it
+	const STAND_LIMIT = 0.45;
+	const PLAYER_RISE = 170;
 
 	const COLORS = ['#4fc3ff', '#ff8a3d', '#7ee07e', '#e58cff'];
 	const NAMES = ['Suds', 'Rinse', 'Spin', 'Fluff'];
@@ -36,8 +39,9 @@
 	const G = SU.G = {
 		mode: 'lobby',
 		level: SU.LEVELS[0],
+		levelNum: 1,
 		map: null,
-		round: 1,
+		trans: null,
 		players: [null, null, null, null],
 		padSlot: new Map(),
 		enemies: [],
@@ -60,6 +64,21 @@
 		return v < a ? a : v > b ? b : v;
 	}
 
+	// ---------- levels ----------
+
+	// placeholder colors per level (hue), so each screen looks different until real art exists
+	const HUES = [205, 190, 265, 25, 140, 300, 45, 340, 170, 225];
+
+	function layoutIndex(num) {
+		return (num - 1) % SU.LEVELS.length;
+	}
+
+	function setLevel(num) {
+		G.levelNum = num;
+		G.level = SU.LEVELS[layoutIndex(num)];
+		G.map = G.level.map;
+	}
+
 	// ---------- tiles ----------
 
 	function tileAt(c, r) {
@@ -70,11 +89,12 @@
 		return '.';
 	}
 
-	function findTiles(ch) {
+	function findTiles(ch, map) {
+		const m = map || G.map;
 		const out = [];
 		for (let r = 0; r < ROWS; r++) {
 			for (let c = 0; c < COLS; c++) {
-				if (G.map[r][c] === ch) out.push({ c: c, r: r });
+				if (m[r][c] === ch) out.push({ c: c, r: r });
 			}
 		}
 		return out;
@@ -119,7 +139,7 @@
 			if (ny + b.h >= top && prevBottom <= top + 0.5) {
 				for (let c = c0; c <= c1; c++) {
 					const t = tileAt(c, row);
-					if (t === '#' || t === '=') {
+					if (t === '#' || (t === '=' && !(b.dropT > 0))) {
 						ny = top - b.h;
 						b.vy = 0;
 						b.onGround = true;
@@ -144,6 +164,20 @@
 		// fall out of the floor gap, drop in from the top
 		if (ny > H) ny = -b.h;
 		b.y = ny;
+	}
+
+	// true when standing on a platform (=) and not on any wall (#), so it's safe to drop through
+	function onPlatform(b) {
+		const row = Math.floor((b.y + b.h + 1) / T);
+		const c0 = Math.floor(b.x / T);
+		const c1 = Math.floor((b.x + b.w - 0.001) / T);
+		let plat = false;
+		for (let c = c0; c <= c1; c++) {
+			const t = tileAt(c, row);
+			if (t === '#') return false;
+			if (t === '=') plat = true;
+		}
+		return plat;
 	}
 
 	function overlap(a, b) {
@@ -172,8 +206,8 @@
 
 	// ---------- players ----------
 
-	function spawnPoint(slot) {
-		const pts = findTiles(String(slot + 1));
+	function spawnPoint(slot, map) {
+		const pts = findTiles(String(slot + 1), map);
 		if (pts.length) return pts[0];
 		return { c: 3 + slot * 2, r: ROWS - 2 };
 	}
@@ -214,7 +248,8 @@
 			inv: 0,
 			lives: 3,
 			score: 0,
-			input: { l: 0, r: 0, j: 0, f: 0 },
+			input: { l: 0, r: 0, d: 0, j: 0, f: 0 },
+			dropT: 0,
 			prevJ: 0,
 			prevF: 0,
 			fireCool: 0,
@@ -256,14 +291,15 @@
 		if (p.state === 'waiting') {
 			if (jPressed) {
 				if (G.mode === 'lobby') startGame();
-				else if (G.mode === 'play' || G.mode === 'clear') spawnPlayer(p, true);
+				else if (G.mode === 'play') spawnPlayer(p, true);
 			}
 			return;
 		}
 		if (p.state === 'out') {
-			if (jPressed && p.stateT > 1.5 && (G.mode === 'play' || G.mode === 'clear')) spawnPlayer(p, true);
+			if (jPressed && p.stateT > 1.5 && G.mode === 'play') spawnPlayer(p, true);
 			return;
 		}
+		if (p.state === 'bubbled') return;
 		if (p.state === 'hurt') {
 			if (p.stateT > 1.3) {
 				p.lives--;
@@ -278,24 +314,43 @@
 			return;
 		}
 
+		// level cleared: everyone hangs in the air while the next level slides in
+		if (G.mode === 'clear' || G.mode === 'transition') {
+			p.vx = 0;
+			p.vy = 0;
+			p.standOn = null;
+			return;
+		}
+
 		// alive
 		if (p.inv > 0) p.inv -= dt;
 		const ax = (inp.r ? 1 : 0) - (inp.l ? 1 : 0);
 		p.vx = ax * P_SPEED;
 		if (ax !== 0) p.dir = ax;
 
-		if (jPressed) p.jumpBuf = 0.12;
+		// holding JUMP keeps you jumping: you jump again the moment you land
+		if (inp.j) p.jumpBuf = 0.12;
 		else p.jumpBuf -= dt;
 		if (p.onGround) p.coyote = 0.08;
 		else p.coyote -= dt;
+		if (p.dropT > 0) p.dropT -= dt;
 		if (p.jumpBuf > 0 && p.coyote > 0) {
-			p.vy = JUMP_V;
+			if (inp.d && p.onGround && onPlatform(p)) {
+				// down + JUMP: drop through the platform you're standing on
+				p.dropT = 0.25;
+				p.y += 2;
+				p.vy = 60;
+				p.onGround = false;
+			} else {
+				p.vy = JUMP_V;
+				SU.sfx('jump');
+			}
 			p.coyote = 0;
 			p.jumpBuf = 0;
-			SU.sfx('jump');
 		}
-		if (!inp.j && p.vy < JUMP_CUT) p.vy = JUMP_CUT;
+		// every jump is full height, however briefly JUMP was pressed (phone lag makes hold time unreliable)
 		p.vy = Math.min(MAX_FALL, p.vy + GRAV * dt);
+		const prevBottom = p.y + p.h;
 		moveBody(p, dt);
 
 		p.fireCool -= dt;
@@ -306,18 +361,49 @@
 			p.blowT = 0.18;
 		}
 
-		// bubbles: bounce on them with JUMP held, otherwise pop them
+		// bubbles: land on top and you're standing on it, but your weight pops it
+		// after STAND_LIMIT seconds. Keep jumping (hold JUMP) and it holds you up,
+		// so you can ride it as it rises. Touching one from the side or below pops it.
+		let standing = null;
 		for (let i = 0; i < G.bubbles.length; i++) {
 			const b = G.bubbles[i];
 			if (b.phase === 'shot' || b.dead) continue;
-			if (!circleRect(b.x, b.y, b.r - 2, p)) continue;
-			const feet = p.y + p.h;
-			if (p.vy > 0 && feet < b.y - b.r * 0.15 && inp.j) {
-				p.vy = JUMP_V * 0.82;
-				SU.sfx('jump');
-			} else {
+			// a freshly bubbled player can't be popped straight away by whoever is standing next to them
+			if (b.player && b.t < 0.5) continue;
+			const top = b.y - b.r;
+			const over = Math.abs(p.x + p.w / 2 - b.x) < b.r + p.w / 2 - 6;
+			const landing = p.vy >= 0 && over && prevBottom <= top + 8 && p.y + p.h >= top - 1;
+			if (landing && !standing) {
+				standing = b;
+				continue;
+			}
+			// your own fresh bubble doesn't pop when you bump it, so you can
+			// blow one against a wall, jump past it and land on top
+			if (b.owner === p.slot && b.t < 0.6) continue;
+			if (circleRect(b.x, b.y, b.r - 2, p)) popChain(b, p);
+		}
+		if (standing && !standing.dead) {
+			const b = standing;
+			if (p.standOn !== b) {
+				p.standOn = b;
+				p.standT = 0;
+			}
+			p.standT += dt;
+			b.load = 1;
+			p.y = b.y - b.r - p.h + 1;
+			p.vy = 0;
+			p.onGround = true;
+			// squashed against the ceiling, or stood on too long: it pops
+			const r = Math.floor(p.y / T);
+			const headHit = p.y < 0 || tileAt(Math.floor(p.x / T), r) === '#' || tileAt(Math.floor((p.x + p.w - 0.001) / T), r) === '#';
+			if (p.standT > STAND_LIMIT || headHit) {
+				p.standOn = null;
+				p.onGround = false;
+				if (headHit) p.y = Math.max(p.y, (r + 1) * T);
 				popChain(b, p);
 			}
+		} else {
+			p.standOn = null;
 		}
 
 		// enemies
@@ -399,6 +485,10 @@
 					SU.sfx('trap');
 				}
 			}
+			for (let i = 0; i < G.players.length && b.phase === 'shot'; i++) {
+				const o = G.players[i];
+				if (o && o.slot !== b.owner && o.state === 'alive' && circleRect(b.x, b.y, b.r + 2, o)) trapPlayer(b, o);
+			}
 			if (b.t >= SHOT_TIME && b.phase === 'shot') {
 				b.phase = 'float';
 				b.t = 0;
@@ -409,7 +499,8 @@
 		// floating up, then drifting along the ceiling
 		const atTop = b.y - b.r <= CEIL_Y + 1;
 		if (!atTop) {
-			b.vy += (-48 - b.vy) * Math.min(1, dt * 3);
+			const rise = b.player ? -PLAYER_RISE : -48;
+			b.vy += (rise - b.vy) * Math.min(1, dt * 3);
 			b.vx *= Math.pow(0.2, dt);
 			b.vx += Math.sin(G.time * 1.5 + b.seed) * 6 * dt;
 		} else {
@@ -425,6 +516,18 @@
 		if (b.enemy) {
 			b.enemy.x = b.x - b.enemy.w / 2;
 			b.enemy.y = b.y - b.enemy.h / 2;
+		}
+		if (b.player) {
+			b.player.x = b.x - b.player.w / 2;
+			b.player.y = b.y - b.player.h / 2;
+			// a bubble with a player in it pops as soon as it reaches the ceiling
+			if (b.y - b.r <= CEIL_Y + 1) {
+				b.dead = true;
+				popFx(b.x, b.y);
+				SU.sfx('pop', 1);
+				releasePlayer(b);
+			}
+			return;
 		}
 
 		if (b.t >= b.life) {
@@ -464,6 +567,39 @@
 		}
 	}
 
+	function trapPlayer(b, o) {
+		b.player = o;
+		b.phase = 'float';
+		b.t = 0;
+		b.r = PLAYER_BUBBLE_R;
+		b.life = 30;
+		b.vx = 0;
+		o.state = 'bubbled';
+		o.stateT = 0;
+		o.vx = 0;
+		o.vy = 0;
+		o.bubble = b;
+		SU.sfx('trap');
+		SU.net.to(o.id, { t: 'buzz', ms: 120 });
+		const shooter = G.players[b.owner];
+		if (shooter) floatText(b.x, b.y - 30, 'GOTCHA!', shooter.color);
+	}
+
+	// lets a player out of a bubble, with a moment of safety
+	function releasePlayer(b) {
+		const o = b.player;
+		b.player = null;
+		if (!o || o.state !== 'bubbled') return;
+		o.state = 'alive';
+		o.bubble = null;
+		o.x = clamp(b.x - o.w / 2, T, W - T - o.w);
+		o.y = Math.max(CEIL_Y, b.y - o.h / 2);
+		o.vx = 0;
+		o.vy = -120;
+		o.inv = Math.max(o.inv, 1);
+		o.jumpBuf = 0;
+	}
+
 	// Pops a bubble and every bubble touching it, and so on down the chain.
 	function popChain(start, p) {
 		const queue = [start];
@@ -475,6 +611,7 @@
 			popped++;
 			popFx(b.x, b.y);
 			SU.sfx('pop', popped);
+			if (b.player) releasePlayer(b);
 			if (b.enemy) {
 				kills++;
 				flingEnemy(b.enemy, kills);
@@ -637,6 +774,7 @@
 
 	function resetLevel() {
 		G.map = G.level.map;
+		G.trans = null;
 		G.enemies = findTiles('e').map(function (t) { return newEnemy(t.c, t.r); });
 		G.bubbles = [];
 		G.items = [];
@@ -653,12 +791,13 @@
 		if (!G.players.some(function (p) { return p; })) return;
 		G.mode = 'play';
 		G.modeT = 0;
-		G.round = 1;
+		setLevel(1);
 		resetLevel();
+		useLevelArt();
 		G.players.forEach(function (p) {
 			if (p && p.connected) spawnPlayer(p, true);
 		});
-		banner('ROUND 1', 1.6);
+		banner('LEVEL 1', 1.6);
 		SU.sfx('start');
 	}
 	SU.startGame = startGame;
@@ -666,13 +805,76 @@
 	function toLobby() {
 		G.mode = 'lobby';
 		G.modeT = 0;
+		setLevel(1);
 		resetLevel();
+		useLevelArt();
 		G.players.forEach(function (p) {
 			if (p) {
 				p.state = 'waiting';
 				p.lives = 3;
 			}
 		});
+	}
+
+	// The old level slides down off the bottom while the next one slides in
+	// from the top. Players float from where they were to their new start spots.
+	const SLIDE_TIME = 2.6;
+
+	function easeInOut(k) {
+		return k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+	}
+
+	function startTransition() {
+		const nextNum = G.levelNum + 1;
+		const next = SU.LEVELS[layoutIndex(nextNum)];
+		G.items = [];
+		G.bubbles = [];
+		G.mode = 'transition';
+		G.modeT = 0;
+		G.trans = { from: layoutIndex(G.levelNum), to: layoutIndex(nextNum), num: nextNum, t: 0 };
+		G.players.forEach(function (p) {
+			if (!p) return;
+			const sp = spawnPoint(p.slot, next.map);
+			p.tFrom = { x: p.x, y: p.y };
+			p.tTo = { x: sp.c * T + (T - p.w) / 2, y: (sp.r + 1) * T - p.h };
+		});
+		SU.sfx('whoosh');
+	}
+
+	function updateTransition(dt) {
+		const tr = G.trans;
+		tr.t += dt;
+		const k = easeInOut(Math.min(1, tr.t / SLIDE_TIME));
+		G.players.forEach(function (p) {
+			if (!p || p.state !== 'alive' || !p.tFrom) return;
+			p.x = p.tFrom.x + (p.tTo.x - p.tFrom.x) * k;
+			p.y = p.tFrom.y + (p.tTo.y - p.tFrom.y) * k;
+		});
+		if (tr.t >= SLIDE_TIME) {
+			setLevel(tr.num);
+			resetLevel();
+			useLevelArt();
+			G.players.forEach(function (p) {
+				if (p) {
+					p.tFrom = null;
+					p.tTo = null;
+				}
+			});
+			G.mode = 'play';
+			G.modeT = 0;
+			banner('LEVEL ' + G.levelNum, 1.8);
+			SU.sfx('start');
+		}
+	}
+
+	// how high players float while the level changes
+	function liftAmount() {
+		if (G.mode === 'clear') return Math.min(1, G.modeT * 1.5) * 10 + Math.sin(G.time * 4) * 3;
+		if (G.mode === 'transition') {
+			const k = Math.min(1, G.trans.t / SLIDE_TIME);
+			return (1 - Math.max(0, (k - 0.85) / 0.15)) * 10 + Math.sin(G.time * 4) * 3;
+		}
+		return 0;
 	}
 
 	function update(dt) {
@@ -683,6 +885,7 @@
 			if (G.banner.t > G.banner.dur) G.banner = null;
 		}
 
+		G.bubbles.forEach(function (b) { b.load = 0; });
 		G.players.forEach(function (p) { if (p) updatePlayer(p, dt); });
 
 		if (G.mode !== 'lobby') {
@@ -709,23 +912,27 @@
 				if (G.clearT > 3.5 || (G.clearT > 1.5 && G.items.length === 0)) {
 					G.mode = 'clear';
 					G.modeT = 0;
-					banner('SPARKLING CLEAN!', 3, '#9ef');
+					// pop whatever bubbles are left (letting out any bubbled players)
+					G.bubbles.forEach(function (b) {
+						popFx(b.x, b.y);
+						if (b.player) releasePlayer(b);
+					});
+					G.bubbles = [];
+					banner('SPARKLING CLEAN!', 2.2, '#9ef');
 					SU.sfx('clear');
 				}
 			}
-			const active = G.players.filter(function (p) { return p && (p.state === 'alive' || p.state === 'hurt'); });
+			const active = G.players.filter(function (p) { return p && (p.state === 'alive' || p.state === 'hurt' || p.state === 'bubbled'); });
 			const out = G.players.filter(function (p) { return p && p.state === 'out'; });
 			if (active.length === 0 && out.length > 0) {
 				G.mode = 'gameover';
 				G.modeT = 0;
 				banner('GAME OVER', 4, '#ff6b6b');
 			}
-		} else if (G.mode === 'clear' && G.modeT > 3) {
-			G.mode = 'play';
-			G.modeT = 0;
-			G.round++;
-			resetLevel();
-			banner('ROUND ' + G.round, 1.6);
+		} else if (G.mode === 'clear' && G.modeT > 2.2) {
+			startTransition();
+		} else if (G.mode === 'transition') {
+			updateTransition(dt);
 		} else if (G.mode === 'gameover' && G.modeT > 4) {
 			toLobby();
 		}
@@ -738,9 +945,11 @@
 	function padStatus(p) {
 		if (G.mode === 'lobby') return 'Press JUMP to start!';
 		if (G.mode === 'gameover') return 'Game over';
+		if (G.mode === 'clear' || G.mode === 'transition') return 'Level clear! Next level...';
 		if (p.state === 'waiting') return 'Press JUMP to jump in!';
 		if (p.state === 'out') return 'Out of lives. Press JUMP to go again';
 		if (p.state === 'hurt') return 'Ouch!';
+		if (p.state === 'bubbled') return 'You got bubbled! Going up...';
 		return 'Eyes on the TV!';
 	}
 
@@ -790,7 +999,7 @@
 		if (p) {
 			p.connected = false;
 			p.awayT = 0;
-			p.input = { l: 0, r: 0, j: 0, f: 0 };
+			p.input = { l: 0, r: 0, d: 0, j: 0, f: 0 };
 		}
 	};
 
@@ -798,13 +1007,15 @@
 		const slot = G.padSlot.get(id);
 		const p = slot != null ? G.players[slot] : null;
 		if (!p || !m || m.t !== 'i') return;
-		p.input = { l: m.l ? 1 : 0, r: m.r ? 1 : 0, j: m.j ? 1 : 0, f: m.f ? 1 : 0 };
+		p.input = { l: m.l ? 1 : 0, r: m.r ? 1 : 0, d: m.d ? 1 : 0, j: m.j ? 1 : 0, f: m.f ? 1 : 0 };
 	};
 
 	// ---------- drawing ----------
 
 	const canvas = document.getElementById('game');
-	const ctx = canvas.getContext('2d');
+	const screenCtx = canvas.getContext('2d');
+	// drawing helpers use ctx; it points at an offscreen canvas while level art is built
+	let ctx = screenCtx;
 	let view = { s: 1, ox: 0, oy: 0 };
 	let tileLayer = null;
 	let wallTile = null;
@@ -822,31 +1033,65 @@
 	}
 	window.addEventListener('resize', resize);
 
-	function buildTiles() {
-		wallTile = document.createElement('canvas');
-		wallTile.width = T;
-		wallTile.height = T;
-		const wc = wallTile.getContext('2d');
-		wc.imageSmoothingEnabled = false;
-		if (!SU.drawSprite(wc, 'tile_wall', 0, T / 2, T)) placeholderTile(wc, 0, 0, '#3b7fb0', '#5aa3d6', '#2a5f86');
+	// Each level's background and tiles are drawn once into its own canvas,
+	// so a whole level can slide during the transition.
+	const levelArt = {};
 
-		tileLayer = document.createElement('canvas');
-		tileLayer.width = W;
-		tileLayer.height = H;
-		const c = tileLayer.getContext('2d');
+	function levelColors(i) {
+		const h = HUES[i % HUES.length];
+		return {
+			wall: ['hsl(' + h + ',45%,46%)', 'hsl(' + h + ',55%,62%)', 'hsl(' + h + ',45%,33%)'],
+			platform: ['hsl(' + h + ',40%,90%)', '#ffffff', 'hsl(' + h + ',30%,70%)'],
+			bg: ['hsl(' + h + ',55%,19%)', 'hsl(' + h + ',55%,11%)']
+		};
+	}
+
+	function tileKey(kind, i) {
+		const own = kind + '_' + (i + 1);
+		if (SU.hasSprite(own)) return own;
+		return 'tile_' + kind;
+	}
+
+	function buildLevelArt(i) {
+		if (levelArt[i]) return levelArt[i];
+		const level = SU.LEVELS[i];
+		const col = levelColors(i);
+		const layer = document.createElement('canvas');
+		layer.width = W;
+		layer.height = H;
+		const c = layer.getContext('2d');
 		c.imageSmoothingEnabled = false;
+		ctx = c;
+		drawBackground(i);
+		ctx = screenCtx;
 		for (let r = 0; r < ROWS; r++) {
-			for (let col = 0; col < COLS; col++) {
-				const t = G.level.map[r][col];
-				const x = col * T;
+			for (let cc = 0; cc < COLS; cc++) {
+				const t = level.map[r][cc];
+				const x = cc * T;
 				const y = r * T;
 				if (t === '#') {
-					if (!SU.drawSprite(c, 'tile_wall', 0, x + T / 2, y + T)) placeholderTile(c, x, y, '#3b7fb0', '#5aa3d6', '#2a5f86');
+					if (!SU.drawSprite(c, tileKey('wall', i), 0, x + T / 2, y + T)) placeholderTile(c, x, y, col.wall[0], col.wall[1], col.wall[2]);
 				} else if (t === '=') {
-					if (!SU.drawSprite(c, 'tile_platform', 0, x + T / 2, y + T)) placeholderTile(c, x, y, '#dbeef8', '#ffffff', '#9fc3d6');
+					if (!SU.drawSprite(c, tileKey('platform', i), 0, x + T / 2, y + T)) placeholderTile(c, x, y, col.platform[0], col.platform[1], col.platform[2]);
 				}
 			}
 		}
+		const wall = document.createElement('canvas');
+		wall.width = T;
+		wall.height = T;
+		const wc = wall.getContext('2d');
+		wc.imageSmoothingEnabled = false;
+		if (!SU.drawSprite(wc, tileKey('wall', i), 0, T / 2, T)) placeholderTile(wc, 0, 0, col.wall[0], col.wall[1], col.wall[2]);
+		levelArt[i] = { layer: layer, wall: wall };
+		return levelArt[i];
+	}
+
+	function useLevelArt() {
+		const art = buildLevelArt(layoutIndex(G.levelNum));
+		tileLayer = art.layer;
+		wallTile = art.wall;
+		// get the next level ready ahead of time
+		buildLevelArt(layoutIndex(G.levelNum + 1));
 	}
 
 	// tiled wall look
@@ -860,11 +1105,12 @@
 		c.fillRect(x + 1, y + 1, 3, T - 2);
 	}
 
-	function drawBackground() {
-		if (SU.drawSprite(ctx, 'background', 0, W / 2, H)) return;
+	function drawBackground(i) {
+		if (SU.drawSprite(ctx, 'bg_' + (i + 1), 0, W / 2, H)) return;
+		const col = levelColors(i);
 		const g = ctx.createLinearGradient(0, 0, 0, H);
-		g.addColorStop(0, '#0e3a52');
-		g.addColorStop(1, '#0a2233');
+		g.addColorStop(0, col.bg[0]);
+		g.addColorStop(1, col.bg[1]);
 		ctx.fillStyle = g;
 		ctx.fillRect(0, 0, W, H);
 		// placeholder laundromat: a store sign and faint rows of front-loading washers
@@ -900,11 +1146,12 @@
 		if (p.state === 'alive' && p.inv > 0 && Math.floor(p.inv * 10) % 2 === 0) return;
 		let anim = 'idle';
 		if (p.state === 'hurt') anim = 'hurt';
+		else if (p.state === 'bubbled') anim = 'fall';
 		else if (p.blowT > 0) anim = 'blow';
 		else if (!p.onGround) anim = p.vy < 0 ? 'jump' : 'fall';
 		else if (Math.abs(p.vx) > 1) anim = 'walk';
 		const cx = p.x + p.w / 2;
-		const bottom = p.y + p.h;
+		const bottom = p.y + p.h - (p.state === 'alive' ? liftAmount() : 0);
 		const k = playerKey(p, anim);
 		if (!(k && SU.drawSprite(ctx, k.key, p.animT, cx, bottom, p.dir < 0, k.filter))) {
 			placeholderPlayer(p, anim, cx, bottom);
@@ -913,7 +1160,7 @@
 		ctx.fillStyle = p.color;
 		ctx.font = 'bold 10px Verdana, sans-serif';
 		ctx.textAlign = 'center';
-		ctx.fillText(p.connected ? 'P' + (p.slot + 1) : 'P' + (p.slot + 1) + '?', cx, p.y - 6);
+		ctx.fillText(p.connected ? 'P' + (p.slot + 1) : 'P' + (p.slot + 1) + '?', cx, bottom - p.h - 6);
 	}
 
 	function placeholderPlayer(p, anim, cx, bottom) {
@@ -1031,11 +1278,21 @@
 
 	function drawBubble(b) {
 		const escaping = b.enemy && b.life - b.t < 2 && Math.floor(b.t * 8) % 2 === 0;
-		if (SU.drawSprite(ctx, 'bubble', b.t, b.x, b.y + b.r + 1, false, escaping ? 'sepia(1) saturate(5) hue-rotate(-40deg)' : '')) return;
+		if (SU.hasSprite('bubble')) {
+			// bubbles holding a player are drawn bigger
+			const k = b.r / BUBBLE_R;
+			ctx.save();
+			ctx.translate(b.x, b.y);
+			ctx.scale(k, k);
+			SU.drawSprite(ctx, 'bubble', b.t, 0, BUBBLE_R + 1, false, escaping ? 'sepia(1) saturate(5) hue-rotate(-40deg)' : '');
+			ctx.restore();
+			return;
+		}
 		const wob = Math.sin(b.t * 6 + b.seed) * 1.2;
+		const squash = b.load ? 0.12 : 0;
 		ctx.save();
-		ctx.translate(b.x, b.y);
-		ctx.scale(1 + wob * 0.02, 1 - wob * 0.02);
+		ctx.translate(b.x, b.y + squash * b.r);
+		ctx.scale(1 + wob * 0.02 + squash, 1 - wob * 0.02 - squash);
 		ctx.fillStyle = escaping ? 'rgba(255,120,120,0.30)' : 'rgba(170,225,255,0.22)';
 		ctx.strokeStyle = escaping ? 'rgba(255,160,160,0.95)' : 'rgba(220,245,255,0.9)';
 		ctx.lineWidth = 2;
@@ -1135,7 +1392,7 @@
 		});
 		if (G.mode !== 'lobby') {
 			drawBrand(W / 2, 12, 17);
-			outlineText('ROUND ' + G.round + (SU.net.code ? '   join: ' + SU.net.code : ''), W / 2, 28, 10, '#cfe');
+			outlineText('LEVEL ' + G.levelNum + (SU.net.code ? '   join: ' + SU.net.code : ''), W / 2, 28, 10, '#cfe');
 		}
 	}
 
@@ -1233,8 +1490,13 @@
 		ctx.rect(0, 0, W, H);
 		ctx.clip();
 
-		drawBackground();
-		if (tileLayer) ctx.drawImage(tileLayer, 0, 0);
+		if (G.mode === 'transition' && G.trans) {
+			const off = Math.round(easeInOut(Math.min(1, G.trans.t / SLIDE_TIME)) * H);
+			ctx.drawImage(buildLevelArt(G.trans.from).layer, 0, off);
+			ctx.drawImage(buildLevelArt(G.trans.to).layer, 0, off - H);
+		} else if (tileLayer) {
+			ctx.drawImage(tileLayer, 0, 0);
+		}
 		G.items.forEach(drawItem);
 		G.enemies.forEach(function (e) { if (e.state !== 'trapped') drawEnemy(e); });
 		G.players.forEach(function (p) { if (p) drawPlayer(p); });
@@ -1270,13 +1532,14 @@
 	});
 
 	// ?keys=1 adds two keyboard players on the TV for testing without phones:
-	// player A: A/D move, W jump, S bubble    player B: arrows move, Up jump, Down bubble
+	// player A: A/D move, W jump, S bubble, hold X + W to drop
+	// player B: arrows move, Up jump, Down bubble, hold / + Up to drop
 	const devKeys = new URLSearchParams(location.search).get('keys') === '1';
 	const DEV = {
-		a: ['kbA', 'l'], d: ['kbA', 'r'], w: ['kbA', 'j'], s: ['kbA', 'f'],
-		ArrowLeft: ['kbB', 'l'], ArrowRight: ['kbB', 'r'], ArrowUp: ['kbB', 'j'], ArrowDown: ['kbB', 'f']
+		a: ['kbA', 'l'], d: ['kbA', 'r'], w: ['kbA', 'j'], s: ['kbA', 'f'], x: ['kbA', 'd'],
+		ArrowLeft: ['kbB', 'l'], ArrowRight: ['kbB', 'r'], ArrowUp: ['kbB', 'j'], ArrowDown: ['kbB', 'f'], '/': ['kbB', 'd']
 	};
-	const devState = { kbA: { t: 'i', l: 0, r: 0, j: 0, f: 0 }, kbB: { t: 'i', l: 0, r: 0, j: 0, f: 0 } };
+	const devState = { kbA: { t: 'i', l: 0, r: 0, d: 0, j: 0, f: 0 }, kbB: { t: 'i', l: 0, r: 0, d: 0, j: 0, f: 0 } };
 	function devKey(e, down) {
 		if (!devKeys) return;
 		const k = DEV[e.key];
@@ -1304,10 +1567,10 @@
 	}
 
 	resize();
-	G.map = G.level.map;
+	setLevel(1);
 	resetLevel();
 	SU.loadAssets(function () {
-		buildTiles();
+		useLevelArt();
 		SU.net.start();
 		requestAnimationFrame(frame);
 	});

@@ -109,6 +109,9 @@ function check(ok, what) { console.log((ok ? 'PASS ' : 'FAIL ') + what); if (!ok
 	// trap test: put an enemy in front of player 1 and fire
 	const trapped = await tv.evaluate(async () => {
 		const G = SU.G, p = G.players[0];
+		G.bubbles = [];
+		p.x = 6 * 32; p.y = 17 * 32 - p.h; p.vy = 0;
+		await new Promise(r => setTimeout(r, 200));
 		const e = G.enemies[0];
 		e.spawnT = 0; e.x = p.x + 60; e.y = p.y + p.h - e.h; e.vx = 0;
 		p.dir = 1; p.inv = 5;
@@ -143,13 +146,104 @@ function check(ok, what) { console.log((ok ? 'PASS ' : 'FAIL ') + what); if (!ok
 	});
 	await sleep(3000);
 	await tv.evaluate(() => { SU.G.items.forEach(it => { const p = SU.G.players[0]; it.x = p.x; it.y = p.y; }); });
-	await sleep(2500);
-	const m2 = await tv.evaluate(() => SU.G.mode + ' ' + SU.G.round);
-	check(/clear|play 2/.test(m2), 'clearing all enemies shows the clear banner (' + m2 + ')');
-	await tv.screenshot({ path: SHOTS + '/6_clear.png' });
-	await sleep(3500);
-	const m3 = await tv.evaluate(() => SU.G.mode + ' ' + SU.G.round + ' ' + SU.G.enemies.length);
-	check(m3 === 'play 2 5', 'round 2 starts with all enemies back (' + m3 + ')');
+	await tv.waitForFunction(() => SU.G.mode === 'clear', null, { timeout: 6000 }).catch(() => {});
+	const m2 = await tv.evaluate(() => SU.G.mode);
+	check(m2 === 'clear', 'clearing all enemies shows the clear banner (' + m2 + ')');
+	await sleep(1000);
+	const lifted = await tv.evaluate(() => SU.G.players[0].vy === 0 && SU.G.mode === 'clear');
+	check(lifted, 'players hang in the air after the clear');
+	await tv.waitForFunction(() => SU.G.mode === 'transition', null, { timeout: 4000 }).catch(() => {});
+	await sleep(1300);
+	await tv.screenshot({ path: SHOTS + '/6_slide.png' });
+	await tv.waitForFunction(() => SU.G.mode === 'play', null, { timeout: 5000 }).catch(() => {});
+	const m3 = await tv.evaluate(() => SU.G.mode + ' ' + SU.G.levelNum + ' ' + SU.G.level.name + ' ' + SU.G.enemies.length + '/' + SU.G.level.map.join('').split('e').length);
+	check(/^play 2 Rinse 5\/6$/.test(m3), 'level 2 slides in with its own lint bunnies (' + m3 + ')');
+	await sleep(500);
+	await tv.screenshot({ path: SHOTS + '/6b_level2.png' });
+
+	// holding JUMP on the phone keeps jumping
+	await tv.evaluate(async () => {
+		const p = SU.G.players[0];
+		p.inv = 99; p.x = 3 * 32; p.y = 17 * 32 - p.h; p.vy = 0;
+		window.__jumps = 0;
+		const orig = SU.sfx;
+		SU.sfx = function (name, x) { if (name === 'jump') window.__jumps++; return orig(name, x); };
+	});
+	await sleep(300);
+	await pads[0].dispatchEvent('#jumpBtn', 'pointerdown', { pointerId: 9, isPrimary: true });
+	await sleep(2000);
+	await pads[0].dispatchEvent('#jumpBtn', 'pointerup', { pointerId: 9, isPrimary: true });
+	await sleep(500);
+	const jumps = await tv.evaluate(() => window.__jumps);
+	check(jumps >= 2, 'holding JUMP jumps again on landing (' + jumps + ' jumps in 2 s)');
+
+	// standing on a bubble: your weight pops it, but bouncing on it keeps it going
+	const weight = await tv.evaluate(async () => {
+		const G = SU.G, p = G.players[0];
+		G.enemies.forEach(e => { e.spawnT = 999; });
+		p.inv = 999;
+		function bubbleAt(y) {
+			const b = { x: 12.5 * 32, y: y, r: 15, dir: 1, vx: 0, vy: 0, phase: 'float', t: 1, life: 99, enemy: null, owner: 3, seed: 0, dead: false };
+			G.bubbles.push(b);
+			return b;
+		}
+		const wait = ms => new Promise(r => setTimeout(r, ms));
+		const still = bubbleAt(300);
+		p.x = still.x - p.w / 2; p.y = 230; p.vy = 0;
+		p.input = { l: 0, r: 0, d: 0, j: 0, f: 0 };
+		await wait(1000);
+		const stillPopped = still.dead;
+		const bouncy = bubbleAt(300);
+		p.x = bouncy.x - p.w / 2; p.y = 230; p.vy = 0;
+		p.input = { l: 0, r: 0, d: 0, j: 1, f: 0 };
+		await wait(1500);
+		p.input = { l: 0, r: 0, d: 0, j: 0, f: 0 };
+		return { stillPopped: stillPopped, bouncyAlive: !bouncy.dead };
+	});
+	check(weight.stillPopped, 'standing still on a bubble pops it');
+	check(weight.bouncyAlive, 'jumping on a bubble keeps it from popping');
+	await tv.evaluate(() => { SU.G.bubbles = []; SU.G.enemies.forEach(e => { e.spawnT = 0; }); });
+
+	// stick down + JUMP drops through a platform
+	await tv.evaluate(async () => {
+		const p = SU.G.players[0];
+		p.inv = 99; p.x = 6 * 32; p.y = 14 * 32 - p.h; p.vy = 0;
+	});
+	await sleep(400);
+	const before = await tv.evaluate(() => { const p = SU.G.players[0]; return Math.round(p.y + p.h) + (p.onGround ? 'g' : ''); });
+	await pads[0].dispatchEvent('#stick', 'pointerdown', { pointerId: 4, clientX: 150, clientY: 150 });
+	await pads[0].dispatchEvent('#stick', 'pointermove', { pointerId: 4, clientX: 150, clientY: 200 });
+	await sleep(100);
+	await hold(pads[0], '#jumpBtn', 80);
+	await pads[0].dispatchEvent('#stick', 'pointerup', { pointerId: 4, clientX: 150, clientY: 200 });
+	await sleep(1000);
+	const after = await tv.evaluate(() => { const p = SU.G.players[0]; return Math.round(p.y + p.h) + (p.onGround ? 'g' : ''); });
+	check(before === '448g' && after === '544g', 'down + JUMP drops through a platform to the floor (' + before + ' -> ' + after + ')');
+
+	// bubble another player: they float to the top and pop out
+	const ride = await tv.evaluate(async () => {
+		const G = SU.G, a = G.players[0], b = G.players[1];
+		await new Promise(r => setTimeout(r, 900));
+		G.enemies.forEach(e => { e.spawnT = 99; });
+		a.inv = 99; b.inv = 0;
+		a.x = 8 * 32; a.y = 17 * 32 - a.h; a.vy = 0; a.dir = 1;
+		b.x = a.x + 70; b.y = a.y; b.vy = 0;
+		b.input = { l: 0, r: 0, j: 0, f: 0 };
+		await new Promise(r => setTimeout(r, 200));
+		a.input = { l: 0, r: 0, j: 0, f: 1 };
+		await new Promise(r => setTimeout(r, 60));
+		a.input = { l: 0, r: 0, j: 0, f: 0 };
+		await new Promise(r => setTimeout(r, 300));
+		const trapped = b.state;
+		const y0 = b.y;
+		let t = 0;
+		while (b.state === 'bubbled' && t < 6000) { await new Promise(r => setTimeout(r, 50)); t += 50; }
+		return { trapped: trapped, y0: Math.round(y0), popY: Math.round(b.y), state: b.state, secs: t / 1000 };
+	});
+	check(ride.trapped === 'bubbled', 'a bubble traps another player (' + ride.trapped + ')');
+	check(ride.state === 'alive' && ride.popY < 80 && ride.secs < 5, 'bubbled player rises to the top and pops out (' + JSON.stringify(ride) + ')');
+	await tv.screenshot({ path: SHOTS + '/5b_after_ride.png' });
+	await tv.evaluate(() => { SU.G.enemies.forEach(e => { e.spawnT = 0; }); });
 
 	// pad gets score updates
 	const sc = await pads[0].textContent('#score');

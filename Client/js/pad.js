@@ -13,7 +13,7 @@
 		try { localStorage.setItem('llPadId', padId); } catch (e) {}
 	}
 
-	const input = { l: 0, r: 0, j: 0, f: 0 };
+	const input = { l: 0, r: 0, d: 0, j: 0, f: 0 };
 	let lastSent = '';
 	let ws = null;
 	let retry = 0;
@@ -75,7 +75,7 @@
 
 	function send(force) {
 		if (!ws || ws.readyState !== 1) return;
-		const s = JSON.stringify({ t: 'i', l: input.l, r: input.r, j: input.j, f: input.f });
+		const s = JSON.stringify({ t: 'i', l: input.l, r: input.r, d: input.d, j: input.j, f: input.f });
 		if (force || s !== lastSent) {
 			ws.send(s);
 			lastSent = s;
@@ -123,6 +123,7 @@
 	let ox = 0;
 	let oy = 0;
 	const DEAD = 14;
+	const DOWN = 28;
 	const MAXR = 50;
 
 	function stickSet(dx, dy) {
@@ -134,6 +135,8 @@
 		knob.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
 		input.l = dx < -DEAD ? 1 : 0;
 		input.r = dx > DEAD ? 1 : 0;
+		// pulling down (more than sideways wobble) + JUMP drops through a platform
+		input.d = dy > DOWN ? 1 : 0;
 		send(false);
 	}
 
@@ -187,7 +190,7 @@
 	bindButton($('fireBtn'), 'f');
 
 	// keyboard, for testing the pad page on a laptop
-	const KEYS = { ArrowLeft: 'l', a: 'l', ArrowRight: 'r', d: 'r', ' ': 'j', w: 'j', ArrowUp: 'j', f: 'f', Enter: 'f' };
+	const KEYS = { ArrowLeft: 'l', a: 'l', ArrowRight: 'r', d: 'r', ' ': 'j', w: 'j', ArrowUp: 'j', ArrowDown: 'd', s: 'd', f: 'f', Enter: 'f' };
 	window.addEventListener('keydown', function (e) {
 		if (document.activeElement === $('codeInput')) return;
 		const k = KEYS[e.key];

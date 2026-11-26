@@ -1,13 +1,13 @@
 // Placeholder sound effects made with the Web Audio API (no files).
 // To use real sounds later, put an .mp3 at assets/sounds/<name>.mp3
-// (jump, blow, trap, pop, splat, treat, hurt, clear, hurry, join, start)
+// (jump, blow, trap, pop, splat, treat, hurt, clear, hurry, join, start, whoosh)
 // and it plays instead of the beep.
 (function () {
 	const SU = window.SU = window.SU || {};
 	let ac = null;
 	let master = null;
 	const files = {};
-	const NAMES = ['jump', 'blow', 'trap', 'pop', 'splat', 'treat', 'hurt', 'clear', 'hurry', 'join', 'start'];
+	const NAMES = ['jump', 'blow', 'trap', 'pop', 'splat', 'treat', 'hurt', 'clear', 'hurry', 'join', 'start', 'whoosh'];
 
 	SU.audioStart = function () {
 		if (ac) {
@@ -70,6 +70,7 @@
 			case 'hurt': tone('sawtooth', 600, 80, 0.6, 0.35); break;
 			case 'hurry': tone('square', 700, 700, 0.1, 0.3); tone('square', 700, 700, 0.1, 0.3, 0.18); tone('square', 700, 700, 0.1, 0.3, 0.36); break;
 			case 'join': tone('triangle', 500, 1000, 0.15, 0.35); break;
+			case 'whoosh': tone('sine', 900, 120, 2.2, 0.25); tone('triangle', 300, 80, 2.2, 0.12); break;
 			case 'start':
 			case 'clear':
 				[523, 659, 784, 1046].forEach(function (f, i) { tone('triangle', f, f, 0.16, 0.35, i * 0.11); });
