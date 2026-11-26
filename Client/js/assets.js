@@ -79,6 +79,22 @@
 
 	// Draws sprite `key` centered at (cx, bottom). Returns false if the
 	// art is missing so the caller can draw a placeholder.
+	// Recoloring a sprite with a canvas filter on every draw is slow, so each
+	// recolored copy (players 2 to 4 using player 1's art) is made once and kept.
+	const tintCache = {};
+	function tinted(key, img, filter) {
+		const id = key + '|' + filter;
+		if (tintCache[id]) return tintCache[id];
+		const cv = document.createElement('canvas');
+		cv.width = img.width;
+		cv.height = img.height;
+		const c = cv.getContext('2d');
+		c.filter = filter;
+		c.drawImage(img, 0, 0);
+		tintCache[id] = cv;
+		return cv;
+	}
+
 	SU.drawSprite = function (ctx, key, t, cx, bottom, flip, filter) {
 		const img = SU.images[key];
 		if (!img) return false;
@@ -87,11 +103,11 @@
 		const f = Math.floor(t * s.fps) % frames;
 		const dw = s.size;
 		const dh = s.size * s.h / s.w;
+		const src = filter ? tinted(key, img, filter) : img;
 		ctx.save();
-		if (filter) ctx.filter = filter;
 		ctx.translate(Math.round(cx), Math.round(bottom));
 		if (flip) ctx.scale(-1, 1);
-		ctx.drawImage(img, f * s.w, 0, s.w, s.h, -dw / 2, -dh, dw, dh);
+		ctx.drawImage(src, f * s.w, 0, s.w, s.h, -dw / 2, -dh, dw, dh);
 		ctx.restore();
 		return true;
 	};

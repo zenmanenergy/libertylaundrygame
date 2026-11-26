@@ -1014,6 +1014,14 @@
 
 	const canvas = document.getElementById('game');
 	const screenCtx = canvas.getContext('2d');
+	const bgCanvas = document.getElementById('bg');
+	const bgCtx = bgCanvas.getContext('2d', { alpha: false });
+	let bgDirty = true;
+	// Big TVs and high-DPI screens can mean a 4K canvas, which is a lot of
+	// pixels to redraw 60 times a second. Draw at up to 1080p and let the
+	// browser scale it up. Add ?res=full to the address to draw at full size.
+	const FULL_RES = /[?&]res=full\b/.test(location.search);
+	const MAX_PIXELS = 1920 * 1080;
 	// drawing helpers use ctx; it points at an offscreen canvas while level art is built
 	let ctx = screenCtx;
 	let view = { s: 1, ox: 0, oy: 0 };
@@ -1021,13 +1029,18 @@
 	let wallTile = null;
 
 	function resize() {
-		const dpr = window.devicePixelRatio || 1;
+		let dpr = window.devicePixelRatio || 1;
+		const area = window.innerWidth * window.innerHeight * dpr * dpr;
+		if (!FULL_RES && area > MAX_PIXELS) dpr *= Math.sqrt(MAX_PIXELS / area);
 		const cw = Math.floor(window.innerWidth * dpr);
 		const ch = Math.floor(window.innerHeight * dpr);
-		canvas.width = cw;
-		canvas.height = ch;
-		canvas.style.width = window.innerWidth + 'px';
-		canvas.style.height = window.innerHeight + 'px';
+		[canvas, bgCanvas].forEach(function (cv) {
+			cv.width = cw;
+			cv.height = ch;
+			cv.style.width = window.innerWidth + 'px';
+			cv.style.height = window.innerHeight + 'px';
+		});
+		bgDirty = true;
 		const s = Math.min(cw / W, ch / H);
 		view = { s: s, ox: Math.floor((cw - W * s) / 2), oy: Math.floor((ch - H * s) / 2) };
 	}
@@ -1090,6 +1103,7 @@
 		const art = buildLevelArt(layoutIndex(G.levelNum));
 		tileLayer = art.layer;
 		wallTile = art.wall;
+		bgDirty = true;
 		// get the next level ready ahead of time
 		buildLevelArt(layoutIndex(G.levelNum + 1));
 	}
@@ -1406,6 +1420,21 @@
 		outlineText('LAUNDRY', lx + w1, y, size, '#6fb6ff', 'left');
 	}
 
+	// the QR code is drawn once into its own canvas instead of every frame
+	let qrCache = null;
+	function qrImage(url, size) {
+		if (qrCache && qrCache.url === url) return qrCache.canvas;
+		const cv = document.createElement('canvas');
+		const px = size * 3;
+		cv.width = px;
+		cv.height = px;
+		const c = cv.getContext('2d');
+		c.imageSmoothingEnabled = false;
+		QR.draw(c, url, 0, 0, px);
+		qrCache = { url: url, canvas: cv };
+		return cv;
+	}
+
 	function drawLobby() {
 		ctx.fillStyle = 'rgba(5,20,30,0.82)';
 		ctx.fillRect(0, 0, W, H);
@@ -1416,7 +1445,7 @@
 		const qy = 160;
 		const qs = 240;
 		if (SU.net.code) {
-			QR.draw(ctx, SU.net.padUrl(), qx, qy, qs);
+			ctx.drawImage(qrImage(SU.net.padUrl(), qs), qx, qy, qs, qs);
 			outlineText('Scan with your phone', qx + qs / 2, qy + qs + 22, 16, '#fff');
 		} else {
 			outlineText(SU.net.connected ? 'Getting a room...' : 'Connecting to server...', qx + qs / 2, qy + qs / 2, 18, '#fc8');
@@ -1464,39 +1493,62 @@
 
 	// On screens that are not 16:9, fill the leftover edges with wall tiles
 	// so the whole screen is used.
-	function drawMargins() {
+	function drawMargins(c) {
 		if (!wallTile) return;
-		const x0 = Math.floor(-view.ox / view.s / T) - 1;
-		const x1 = Math.ceil((canvas.width - view.ox) / view.s / T) + 1;
-		const y0 = Math.floor(-view.oy / view.s / T) - 1;
-		const y1 = Math.ceil((canvas.height - view.oy) / view.s / T) + 1;
+		if (view.ox <= 0 && view.oy <= 0) return;
+		const x0 = Math.floor(-view.ox / view.s / T);
+		const x1 = Math.ceil((bgCanvas.width - view.ox) / view.s / T);
+		const y0 = Math.floor(-view.oy / view.s / T);
+		const y1 = Math.ceil((bgCanvas.height - view.oy) / view.s / T);
 		for (let r = y0; r < y1; r++) {
-			for (let c = x0; c < x1; c++) {
-				if (c >= 0 && c < COLS && r >= 0 && r < ROWS) continue;
-				ctx.drawImage(wallTile, c * T, r * T);
+			for (let cc = x0; cc < x1; cc++) {
+				if (cc >= 0 && cc < COLS && r >= 0 && r < ROWS) continue;
+				c.drawImage(wallTile, cc * T, r * T);
 			}
 		}
 	}
 
+	// the level art and the edge fill: redrawn only when something changes
+	function renderBg() {
+		const c = bgCtx;
+		c.setTransform(1, 0, 0, 1, 0, 0);
+		c.fillStyle = '#061219';
+		c.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
+		c.setTransform(view.s, 0, 0, view.s, view.ox, view.oy);
+		c.imageSmoothingEnabled = false;
+		drawMargins(c);
+		c.save();
+		c.beginPath();
+		c.rect(0, 0, W, H);
+		c.clip();
+		if (G.mode === 'transition' && G.trans) {
+			const off = Math.round(easeInOut(Math.min(1, G.trans.t / SLIDE_TIME)) * H);
+			c.drawImage(buildLevelArt(G.trans.from).layer, 0, off);
+			c.drawImage(buildLevelArt(G.trans.to).layer, 0, off - H);
+		} else if (tileLayer) {
+			c.drawImage(tileLayer, 0, 0);
+		}
+		c.restore();
+	}
+
+	let wasSliding = false;
 	function render() {
+		const sliding = G.mode === 'transition';
+		if (bgDirty || sliding || wasSliding) {
+			renderBg();
+			bgDirty = false;
+		}
+		wasSliding = sliding;
+
 		ctx.setTransform(1, 0, 0, 1, 0, 0);
-		ctx.fillStyle = '#061219';
-		ctx.fillRect(0, 0, canvas.width, canvas.height);
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
 		ctx.setTransform(view.s, 0, 0, view.s, view.ox, view.oy);
 		ctx.imageSmoothingEnabled = false;
-		drawMargins();
 		ctx.save();
 		ctx.beginPath();
 		ctx.rect(0, 0, W, H);
 		ctx.clip();
 
-		if (G.mode === 'transition' && G.trans) {
-			const off = Math.round(easeInOut(Math.min(1, G.trans.t / SLIDE_TIME)) * H);
-			ctx.drawImage(buildLevelArt(G.trans.from).layer, 0, off);
-			ctx.drawImage(buildLevelArt(G.trans.to).layer, 0, off - H);
-		} else if (tileLayer) {
-			ctx.drawImage(tileLayer, 0, 0);
-		}
 		G.items.forEach(drawItem);
 		G.enemies.forEach(function (e) { if (e.state !== 'trapped') drawEnemy(e); });
 		G.players.forEach(function (p) { if (p) drawPlayer(p); });
@@ -1558,11 +1610,13 @@
 	function frame(now) {
 		acc += Math.min(0.1, (now - last) / 1000);
 		last = now;
+		let stepped = false;
 		while (acc >= STEP) {
 			update(STEP);
 			acc -= STEP;
+			stepped = true;
 		}
-		render();
+		if (stepped) render();
 		requestAnimationFrame(frame);
 	}
 

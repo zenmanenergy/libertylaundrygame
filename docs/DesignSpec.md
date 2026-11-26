@@ -56,3 +56,10 @@ test/play.js runs the TV and two phones in headless Chrome and checks joining, m
 - More levels and a level order
 - Real art and sounds (see ASSETS.md)
 - More enemy types
+
+## Performance
+
+- The level art (background, tiles and the wall fill at the screen edges) is drawn on its own canvas (#bg) under the game canvas, and only redrawn when the level or screen size changes, or while a level slides in.
+- Drawing is capped at about 1920 x 1080 pixels and the browser scales it up to fill bigger or high-DPI screens. Add ?res=full to the TV address to draw at the screen's full resolution.
+- The game draws at most 60 frames a second, even on 120 or 144 Hz monitors.
+- The QR code and recolored player sprites are drawn once and reused.
