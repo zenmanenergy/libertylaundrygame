@@ -190,7 +190,9 @@ function wsSend(conn, obj) {
 
 // ---------- rooms ----------
 
-// code -> { host: conn|null, pads: Map(id -> conn), hostGoneAt: ms }
+// code -> { host: conn|null, pads: Map(id -> conn), viewers: Map(vid -> conn), hostGoneAt: ms }
+// A viewer is a second TV somewhere else showing the same game. The host TV
+// still runs everything; it sends snapshots of the game for viewers to draw.
 const rooms = new Map();
 const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
@@ -208,7 +210,7 @@ function attachHost(conn, wanted) {
 	if (!room || (room.host && room.host.open)) {
 		// a room the TV asked for but that is gone or taken gets a fresh code
 		if (!/^[A-Z]{4}$/.test(code) || rooms.has(code)) code = newCode();
-		room = { host: null, pads: new Map(), hostGoneAt: 0 };
+		room = { host: null, pads: new Map(), viewers: new Map(), hostGoneAt: 0 };
 		rooms.set(code, room);
 	}
 	room.host = conn;
@@ -218,6 +220,8 @@ function attachHost(conn, wanted) {
 	room.pads.forEach(function (padConn, id) {
 		wsSend(conn, { t: 'join', id: id });
 	});
+	wsSend(conn, { t: 'viewers', n: room.viewers.size });
+	room.viewers.forEach(function (v) { wsSend(v, { t: 'hostback' }); });
 	conn.onmessage = function (text) {
 		let msg;
 		try { msg = JSON.parse(text); } catch (e) { return; }
@@ -226,6 +230,15 @@ function attachHost(conn, wanted) {
 			if (pad) wsSend(pad, msg.m);
 		} else if (msg.t === 'all') {
 			room.pads.forEach(function (pad) { wsSend(pad, msg.m); });
+		} else if (msg.t === 'view') {
+			// one snapshot, sent to every viewer TV
+			if (room.viewers.size) {
+				const payload = Buffer.from(JSON.stringify(msg.m), 'utf8');
+				room.viewers.forEach(function (v) { wsSendRaw(v, 0x1, payload); });
+			}
+		} else if (msg.t === 'tov') {
+			const v = room.viewers.get(msg.vid);
+			if (v) wsSend(v, msg.m);
 		} else if (msg.t === 'kick') {
 			const pad = room.pads.get(msg.id);
 			if (pad) {
@@ -239,6 +252,36 @@ function attachHost(conn, wanted) {
 			room.host = null;
 			room.hostGoneAt = Date.now();
 			room.pads.forEach(function (pad) { wsSend(pad, { t: 'hostgone' }); });
+			room.viewers.forEach(function (v) { wsSend(v, { t: 'hostgone' }); });
+		}
+	};
+}
+
+function attachViewer(conn, code) {
+	code = (code || '').toUpperCase();
+	const room = rooms.get(code);
+	if (!room) {
+		wsSend(conn, { t: 'noroom' });
+		setTimeout(function () { conn.socket.end(); }, 200);
+		return;
+	}
+	const vid = 'v' + crypto.randomBytes(3).toString('hex');
+	room.viewers.set(vid, conn);
+	wsSend(conn, { t: 'viewing', code: code, vid: vid, host: !!(room.host && room.host.open) });
+	if (room.host) wsSend(room.host, { t: 'viewers', n: room.viewers.size });
+	// game controllers plugged into the viewer TV: their presses go to the host
+	conn.onmessage = function (text) {
+		let msg;
+		try { msg = JSON.parse(text); } catch (e) { return; }
+		if (msg.t === 'vin' && room.host) wsSend(room.host, { t: 'vin', vid: vid, id: String(msg.id || ''), m: msg.m });
+	};
+	conn.onclose = function () {
+		if (room.viewers.get(vid) === conn) {
+			room.viewers.delete(vid);
+			if (room.host) {
+				wsSend(room.host, { t: 'vleave', vid: vid });
+				wsSend(room.host, { t: 'viewers', n: room.viewers.size });
+			}
 		}
 	};
 }
@@ -284,6 +327,7 @@ server.on('upgrade', function (req, socket) {
 	const role = u.searchParams.get('role');
 	if (role === 'host') attachHost(conn, u.searchParams.get('room'));
 	else if (role === 'pad') attachPad(conn, u.searchParams.get('room'), u.searchParams.get('id'));
+	else if (role === 'viewer') attachViewer(conn, u.searchParams.get('room'));
 	else conn.socket.end();
 });
 
@@ -294,6 +338,7 @@ setInterval(function () {
 		const all = [];
 		if (room.host) all.push(room.host);
 		room.pads.forEach(function (p) { all.push(p); });
+		room.viewers.forEach(function (v) { all.push(v); });
 		all.forEach(function (c) {
 			if (now - c.lastSeen > 45000) {
 				try { c.socket.destroy(); } catch (e) {}
@@ -302,7 +347,7 @@ setInterval(function () {
 				wsSendRaw(c, 0x9, Buffer.alloc(0));
 			}
 		});
-		if (!room.host && room.pads.size === 0 && now - room.hostGoneAt > 10 * 60 * 1000) rooms.delete(code);
+		if (!room.host && room.pads.size === 0 && room.viewers.size === 0 && now - room.hostGoneAt > 10 * 60 * 1000) rooms.delete(code);
 		else if (!room.host && now - room.hostGoneAt > 60 * 60 * 1000) rooms.delete(code);
 	});
 }, 15000);

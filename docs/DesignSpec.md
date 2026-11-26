@@ -74,3 +74,28 @@ test/play.js runs the TV and two phones in headless Chrome and checks joining, m
 - Drawing is capped at about 1920 x 1080 pixels and the browser scales it up to fill bigger or high-DPI screens. Add ?res=full to the TV address to draw at the screen's full resolution.
 - The game draws at most 60 frames a second, even on 120 or 144 Hz monitors.
 - The QR code and recolored player sprites are drawn once and reused.
+
+## Game controllers
+
+Any Bluetooth or USB game controller the browser can see (the Gamepad API) can play alongside phones. Up to 4 players total, phones and controllers mixed.
+
+- Press any button to join. That first press only joins; it doesn't also jump or start the game.
+- Stick or D-pad: move. A (or Y): jump. B, X, RB or RT: blow a bubble. Down + A: drop through a platform. START: start the game from the lobby. A also starts it, the same as JUMP on a phone.
+- Getting hit or bubbled rumbles the controller, if it supports rumble.
+- Turning a controller off marks its player as away, like a phone that disconnects. Turning it back on within 30 seconds takes the same player back.
+- The lobby shows how many controllers the browser can see, or "This browser can't read game controllers" when the browser has no gamepad support at all. That is the quick way to test a smart TV browser.
+- On a Fire TV, the built-in Silk browser has incomplete gamepad support. Use Amazon's Web App Tester app (enter the game's URL) instead.
+- test/gamepad.js fakes a controller on the TV page and plays with it.
+
+## Second TV (viewer)
+
+Two places can play the same game: the main TV (the host) runs everything, and a second TV somewhere else shows it.
+
+- On the second TV, open watch.html and type the room code from the main TV. That loads index.html?watch=CODE.
+- People at the second location join with their phones using the same code (the second TV shows the same QR code), or with game controllers paired to the second TV.
+- The host sends a snapshot of the game 20 times a second, about 0.5 KB each (about 11 KB/s per second TV). Each player, lint bunny, bubble, treat and effect is a short array of values; the field order is in PF, EF, BF, IF and FF in game.js.
+- The second TV draws about 0.11 s behind the newest snapshot and slides things between snapshots, so motion is smooth. Sounds come along in the snapshots.
+- Controllers on the second TV send their presses to the host as {t:'vin', id, m}. The host sees them as players with ids like v1a2b3c:gp0. Rumbles go back as {t:'tov', vid, m:{t:'buzz', id, ms}}.
+- Server messages: a viewer connects to /ws?role=viewer&room=CODE and gets {t:'viewing', code, vid, host}. The host gets {t:'viewers', n} when the count changes, {t:'vin', vid, id, m} for controller input, and {t:'vleave', vid} when a viewer leaves. The host sends {t:'view', m: snapshot}, which the server passes to every viewer.
+- Delay for the second location: a press goes phone to server to main TV, and the result comes back main TV to server to second TV, plus the 0.11 s smoothing delay.
+- test/viewer.js runs a host, a second TV, a phone and a controller on the second TV.

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Liberty Laundry - Second TV</title>
+<link rel="stylesheet" href="css/pad.css">
+<style>
+	/* this page is for a TV, so bigger than the phone join screen */
+	#join h1 {
+		font-size: 64px;
+	}
+	#join p {
+		font-size: 24px;
+		max-width: 800px;
+	}
+	#codeInput {
+		font-size: 56px;
+		width: 300px;
+	}
+	#joinBtn {
+		font-size: 32px;
+	}
+	#joinBtn:focus, #codeInput:focus {
+		outline: 4px solid #ffe066;
+	}
+</style>
+</head>
+<body>
+
+<div id="join" class="screen">
+	<h1><span class="r">LIBERTY</span> <span class="b">LAUNDRY</span></h1>
+	<p>Show a game that's running on another TV. Type the code shown on that TV.</p>
+	<input id="codeInput" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD" autofocus>
+	<button id="joinBtn">Watch</button>
+	<p id="joinMsg"></p>
+</div>
+
+<script>
+	(function () {
+		const input = document.getElementById('codeInput');
+		const msg = document.getElementById('joinMsg');
+		const saved = new URLSearchParams(location.search).get('room') || '';
+		if (saved) input.value = saved.toUpperCase();
+		function go() {
+			const code = input.value.trim().toUpperCase();
+			if (!/^[A-Z]{4}$/.test(code)) {
+				msg.textContent = 'The code is 4 letters.';
+				return;
+			}
+			location.href = 'index.html?watch=' + code;
+		}
+		document.getElementById('joinBtn').addEventListener('click', go);
+		input.addEventListener('keydown', function (e) {
+			if (e.key === 'Enter') go();
+		});
+		// letters only, always uppercase
+		input.addEventListener('input', function () {
+			input.value = input.value.toUpperCase().replace(/[^A-Z]/g, '');
+		});
+	})();
+</script>
+</body>
+</html>

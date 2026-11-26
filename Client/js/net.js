@@ -13,8 +13,20 @@
 		onLeave: null,
 		onInput: null,
 		ws: null,
-		peers: {}
+		peers: {},
+		// host side: how many viewer TVs are watching
+		viewers: 0,
+		// viewer side: this page is a second TV showing someone else's game (?watch=CODE)
+		watch: (new URLSearchParams(location.search).get('watch') || '').toUpperCase(),
+		vid: '',
+		hostHere: false,
+		noRoom: false,
+		onSnap: null,
+		onViewerInput: null,
+		onViewerLeave: null,
+		onViewerBuzz: null
 	};
+	net.viewer = /^[A-Z]{4}$/.test(net.watch);
 
 	// ---------- direct link to each phone ----------
 	// The server is far away (out over the internet and back). When the phone
@@ -90,7 +102,8 @@
 		const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
 		let saved = '';
 		try { saved = sessionStorage.getItem('llRoom') || ''; } catch (e) {}
-		const ws = new WebSocket(proto + '//' + location.host + SU.BASE + 'ws?role=host&room=' + saved);
+		const url = net.viewer ? 'ws?role=viewer&room=' + net.watch : 'ws?role=host&room=' + saved;
+		const ws = new WebSocket(proto + '//' + location.host + SU.BASE + url);
 		net.ws = ws;
 		ws.onopen = function () {
 			retry = 0;
@@ -99,6 +112,10 @@
 		ws.onmessage = function (ev) {
 			let m;
 			try { m = JSON.parse(ev.data); } catch (e) { return; }
+			if (net.viewer) {
+				fromServerAsViewer(m);
+				return;
+			}
 			if (m.t === 'room') {
 				net.code = m.code;
 				try { sessionStorage.setItem('llRoom', m.code); } catch (e) {}
@@ -109,6 +126,12 @@
 				if (net.onLeave) net.onLeave(m.id);
 			} else if (m.t === 'in') {
 				fromPhone(m.id, m.m, null);
+			} else if (m.t === 'viewers') {
+				net.viewers = m.n;
+			} else if (m.t === 'vin') {
+				if (net.onViewerInput) net.onViewerInput(m.vid, m.id, m.m);
+			} else if (m.t === 'vleave') {
+				if (net.onViewerLeave) net.onViewerLeave(m.vid);
 			}
 		};
 		ws.onclose = function () {
@@ -117,6 +140,25 @@
 			retry++;
 			setTimeout(connect, Math.min(5000, 500 * retry));
 		};
+	}
+
+	function fromServerAsViewer(m) {
+		if (m.t === 'snap') {
+			if (net.onSnap) net.onSnap(m);
+		} else if (m.t === 'viewing') {
+			net.code = m.code;
+			net.vid = m.vid;
+			net.hostHere = m.host;
+			net.noRoom = false;
+		} else if (m.t === 'hostgone') {
+			net.hostHere = false;
+		} else if (m.t === 'hostback') {
+			net.hostHere = true;
+		} else if (m.t === 'noroom') {
+			net.noRoom = true;
+		} else if (m.t === 'buzz') {
+			if (net.onViewerBuzz) net.onViewerBuzz(m.id, m.ms);
+		}
 	}
 
 	function raw(obj) {
@@ -133,6 +175,11 @@
 		raw({ t: 'to', id: id, m: msg });
 	};
 	net.all = function (msg) { raw({ t: 'all', m: msg }); };
+	// host: a game snapshot for the viewer TVs, and messages for one viewer
+	net.view = function (snap) { raw({ t: 'view', m: snap }); };
+	net.toViewer = function (vid, msg) { raw({ t: 'tov', vid: vid, m: msg }); };
+	// viewer: a controller on this TV joined, pressed something or left
+	net.viewerSend = function (id, msg) { raw({ t: 'vin', id: id, m: msg }); };
 	net.kick = function (id, why) { raw({ t: 'kick', id: id, why: why }); };
 	net.start = connect;
 

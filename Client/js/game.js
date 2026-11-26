@@ -268,7 +268,7 @@
 		p.vx = 0;
 		p.vy = 0;
 		SU.sfx('hurt');
-		SU.net.to(p.id, { t: 'buzz', ms: 300 });
+		toPlayer(p.id, { t: 'buzz', ms: 300 });
 	}
 
 	function updatePlayer(p, dt) {
@@ -580,7 +580,7 @@
 		o.vy = 0;
 		o.bubble = b;
 		SU.sfx('trap');
-		SU.net.to(o.id, { t: 'buzz', ms: 120 });
+		toPlayer(o.id, { t: 'buzz', ms: 120 });
 		const shooter = G.players[b.owner];
 		if (shooter) floatText(b.x, b.y - 30, 'GOTCHA!', shooter.color);
 	}
@@ -633,7 +633,7 @@
 			if (kills > 1) floatText(start.x, start.y - 44, kills + 'x COMBO!', '#ffe066');
 		}
 		p.score += pts;
-		if (kills) SU.net.to(p.id, { t: 'buzz', ms: 40 + kills * 30 });
+		if (kills) toPlayer(p.id, { t: 'buzz', ms: 40 + kills * 30 });
 	}
 
 	// ---------- enemies ----------
@@ -966,11 +966,167 @@
 		};
 		const s = JSON.stringify(msg);
 		if (s !== p.padMsg) {
-			SU.net.to(p.id, msg);
+			toPlayer(p.id, msg);
 			p.padMsg = s;
 			p.padSentT = 0.2;
 		}
 	}
+
+	// ---------- game controllers (Gamepad API) ----------
+	// Any Bluetooth or USB controller paired with the TV computer (or a Fire TV)
+	// can play. Press A to join. Controllers get player ids like 'gp0'.
+	//   stick or D-pad: move     A (or Y): jump     B, X, RB or RT: bubble
+	//   down + A: drop through a platform     START: start the game in the lobby
+	const GP_PREFIX = 'gp';
+	const gpState = {};
+
+	function isPad(id) {
+		return typeof id === 'string' && id.indexOf(GP_PREFIX) === 0;
+	}
+
+	function gpPressed(gp, i) {
+		const b = gp.buttons[i];
+		return !!(b && (b.pressed || b.value > 0.5));
+	}
+
+	function gpRumble(id, ms) {
+		const gp = navigator.getGamepads ? navigator.getGamepads()[Number(id.slice(GP_PREFIX.length))] : null;
+		const act = gp && gp.vibrationActuator;
+		if (act && act.playEffect) {
+			act.playEffect('dual-rumble', { duration: ms, strongMagnitude: 0.6, weakMagnitude: 0.6 }).catch(function () {});
+		}
+	}
+
+	// On the host TV a controller joins the game directly. On a viewer TV
+	// (a second TV somewhere else) its presses are sent to the host instead.
+	const VIEWER = SU.net.viewer;
+	function gpInGame(id) {
+		if (!VIEWER) return G.padSlot.has(id) && G.players[G.padSlot.get(id)];
+		const full = SU.net.vid + ':' + id;
+		return G.players.some(function (p) { return p && p.id === full; });
+	}
+	function gpJoin(id) {
+		if (VIEWER) SU.net.viewerSend(id, { t: 'join' });
+		else SU.net.onJoin(id);
+	}
+	function gpInput(id, inp) {
+		if (VIEWER) SU.net.viewerSend(id, inp);
+		else SU.net.onInput(id, inp);
+	}
+	function gpLeave(id) {
+		if (VIEWER) SU.net.viewerSend(id, { t: 'leave' });
+		else SU.net.onLeave(id);
+	}
+	function gpStart() {
+		if (VIEWER) SU.net.viewerSend('tv', { t: 'start' });
+		else if (G.mode === 'lobby') startGame();
+	}
+
+	function pollGamepads() {
+		if (!navigator.getGamepads) return;
+		const pads = navigator.getGamepads();
+		const seen = {};
+		for (let i = 0; i < pads.length; i++) {
+			const gp = pads[i];
+			if (!gp || !gp.connected) continue;
+			const id = GP_PREFIX + gp.index;
+			seen[id] = true;
+			const ax = gp.axes[0] || 0;
+			const ay = gp.axes[1] || 0;
+			const inp = {
+				t: 'i',
+				l: ax < -0.5 || gpPressed(gp, 14) ? 1 : 0,
+				r: ax > 0.5 || gpPressed(gp, 15) ? 1 : 0,
+				d: ay > 0.6 || gpPressed(gp, 13) ? 1 : 0,
+				j: gpPressed(gp, 0) || gpPressed(gp, 3) ? 1 : 0,
+				f: gpPressed(gp, 1) || gpPressed(gp, 2) || gpPressed(gp, 5) || gpPressed(gp, 7) ? 1 : 0
+			};
+			const start = gpPressed(gp, 9);
+			const any = inp.l || inp.r || inp.d || inp.j || inp.f || start;
+			let st = gpState[id];
+			if (!st) {
+				st = gpState[id] = { joined: false, holdOff: false, key: '', start: false, asked: 0 };
+			}
+			const inGame = gpInGame(id);
+			if (!inGame) {
+				st.joined = false;
+				// a press joins; the same press shouldn't also jump or start the game
+				// (a viewer TV waits up to a second for the host to answer before asking again)
+				const now = performance.now();
+				if (any && G.players.some(function (p) { return !p; }) && now - st.asked > 1000) {
+					gpJoin(id);
+					st.asked = now;
+					st.holdOff = true;
+				}
+				continue;
+			}
+			if (!st.joined) {
+				// joined, or a controller that dropped out and came back
+				if (!VIEWER) gpJoin(id);
+				st.joined = true;
+				st.key = '';
+			}
+			if (st.holdOff) {
+				if (any) continue;
+				st.holdOff = false;
+			}
+			if (start && !st.start && G.mode === 'lobby') gpStart();
+			st.start = start;
+			const key = '' + inp.l + inp.r + inp.d + inp.j + inp.f;
+			if (key !== st.key) {
+				st.key = key;
+				gpInput(id, inp);
+			}
+		}
+		// unplugged or switched off
+		Object.keys(gpState).forEach(function (id) {
+			if (seen[id]) return;
+			if (gpState[id].joined) gpLeave(id);
+			delete gpState[id];
+		});
+	}
+
+	function gamepadCount() {
+		if (!navigator.getGamepads) return -1;
+		let n = 0;
+		const pads = navigator.getGamepads();
+		for (let i = 0; i < pads.length; i++) if (pads[i] && pads[i].connected) n++;
+		return n;
+	}
+
+	// messages for a player: phones get them over the network, controllers can only rumble
+	function toPlayer(id, msg) {
+		const colon = typeof id === 'string' ? id.indexOf(':') : -1;
+		if (colon > 0) {
+			// a controller on a viewer TV
+			if (msg.t === 'buzz') SU.net.toViewer(id.slice(0, colon), { t: 'buzz', id: id.slice(colon + 1), ms: msg.ms });
+			return;
+		}
+		if (isPad(id)) {
+			if (msg.t === 'buzz') gpRumble(id, msg.ms);
+			return;
+		}
+		SU.net.to(id, msg);
+	}
+
+	// controllers on viewer TVs show up as players with ids like 'v1a2b3c:gp0'
+	SU.net.onViewerInput = function (vid, id, m) {
+		if (!m) return;
+		const full = vid + ':' + id;
+		if (m.t === 'join') SU.net.onJoin(full);
+		else if (m.t === 'leave') SU.net.onLeave(full);
+		else if (m.t === 'start') {
+			if (G.mode === 'lobby' && G.players.some(function (p) { return p; })) startGame();
+		} else if (m.t === 'i') SU.net.onInput(full, m);
+	};
+	SU.net.onViewerLeave = function (vid) {
+		G.players.forEach(function (p) {
+			if (p && typeof p.id === 'string' && p.id.indexOf(vid + ':') === 0) SU.net.onLeave(p.id);
+		});
+	};
+	SU.net.onViewerBuzz = function (id, ms) {
+		gpRumble(id, ms);
+	};
 
 	SU.net.onJoin = function (id) {
 		if (G.padSlot.has(id)) {
@@ -1482,9 +1638,22 @@
 		const any = G.players.some(function (p) { return p; });
 		const pulse = 0.6 + Math.sin(G.time * 4) * 0.4;
 		ctx.globalAlpha = any ? pulse : 0.7;
-		outlineText(any ? 'Press JUMP on a phone (or Enter here) to start' : 'Waiting for players...', W / 2, 490, 22, '#fff');
+		outlineText(any ? 'Press JUMP on a phone, A or START on a controller (or Enter here) to start' : 'Waiting for players...', W / 2, 490, 22, '#fff');
 		ctx.globalAlpha = 1;
-		outlineText((SU.audioReady() ? '' : 'Click or press any key on this screen to turn on sound   |   ') + 'F: full screen on/off', W / 2, 530, 13, '#9ab');
+		// controllers: shows whether this browser can see them at all (handy on smart TVs)
+		const gpn = gamepadCount();
+		let gpText;
+		if (gpn < 0) gpText = 'This browser can\'t read game controllers';
+		else if (gpn === 0) gpText = 'Got a game controller? Pair it, then press A to join';
+		else gpText = 'Controllers found: ' + gpn + '. Press A to join';
+		outlineText(gpText, W / 2, 512, 14, gpn < 0 ? '#ff9b7a' : '#cfe');
+		// playing with a second TV somewhere else (under the player slots)
+		if (VIEWER) {
+			outlineText('Second TV: showing the game from the main TV', 470, 414, 14, '#ffe066', 'left');
+		} else if (SU.net.code) {
+			outlineText('Another TV somewhere else? On it, open' + (SU.net.viewers ? '   (' + SU.net.viewers + ' watching)' : ''), 470, 412, 13, '#cfe', 'left');
+			outlineText(location.host + SU.BASE + 'watch.html  and enter ' + SU.net.code, 470, 430, 13, '#fff', 'left');
+		}
 	}
 
 	function drawBanner() {
@@ -1573,6 +1742,10 @@
 
 	function unlock() {
 		SU.audioStart();
+		if (VIEWER) {
+			if (G.mode === 'lobby' && G.players.some(function (p) { return p; })) SU.net.viewerSend('tv', { t: 'start' });
+			return;
+		}
 		if (G.mode === 'lobby' && G.players.some(function (p) { return p; })) startGame();
 	}
 	// Full screen: the first click on the page goes full screen once. After that
@@ -1615,7 +1788,7 @@
 	};
 	const devState = { kbA: { t: 'i', l: 0, r: 0, d: 0, j: 0, f: 0 }, kbB: { t: 'i', l: 0, r: 0, d: 0, j: 0, f: 0 } };
 	function devKey(e, down) {
-		if (!devKeys) return;
+		if (!devKeys || VIEWER) return;
 		const k = DEV[e.key];
 		if (!k) return;
 		e.preventDefault();
@@ -1624,14 +1797,220 @@
 		SU.net.onInput(k[0], devState[k[0]]);
 	}
 
+	// ---------- second TV (viewer) ----------
+	// The host sends a snapshot of what's on screen 20 times a second. The
+	// viewer draws it about 0.1 s behind, sliding things smoothly between
+	// snapshots. Each thing is a short array of values in the order below.
+
+	const SNAP_EVERY = 0.05;
+	const VIEW_DELAY = 110;
+	const PF = ['slot', 'id', 'name', 'color', 'connected', 'x', 'y', 'w', 'h', 'vx', 'vy', 'dir', 'onGround', 'state', 'stateT', 'inv', 'lives', 'score', 'blowT', 'animT'];
+	const EF = ['_id', 'x', 'y', 'w', 'h', 'dir', 'state', 'angry', 'spawnT', 'spin', 'animT'];
+	const BF = ['_id', 'x', 'y', 'r', 't', 'life', 'seed', 'load'];
+	const IF = ['_id', 'x', 'y', 'w', 'h', 't'];
+	const FF = ['kind', 'x', 'y', 't', 'dur', 'text', 'color'];
+	// numbers that slide between snapshots; everything else snaps
+	const LERP = { x: 1, y: 1, r: 1, t: 1, stateT: 1, inv: 1, blowT: 1, animT: 1, spawnT: 1, spin: 1 };
+
+	// sounds played on the host since the last snapshot
+	const sfxQueue = [];
+	const playSfx = SU.sfx;
+	SU.sfx = function (name, extra) {
+		if (!VIEWER && SU.net.viewers > 0 && sfxQueue.length < 40) sfxQueue.push(name);
+		playSfx(name, extra);
+	};
+
+	let nextId = 1;
+	function idOf(o) {
+		if (!o._id) o._id = nextId++;
+		return o._id;
+	}
+
+	function pack(o, fields) {
+		return fields.map(function (f) {
+			const v = f === '_id' ? idOf(o) : o[f];
+			if (typeof v === 'number') return Math.round(v * 100) / 100;
+			if (typeof v === 'boolean') return v ? 1 : 0;
+			return v == null ? 0 : v;
+		});
+	}
+
+	function unpack(a, fields) {
+		const o = {};
+		for (let i = 0; i < fields.length; i++) o[fields[i]] = a[i];
+		return o;
+	}
+
+	function buildSnap() {
+		const snap = {
+			t: 'snap',
+			hT: Math.round(performance.now()),
+			mode: G.mode,
+			modeT: Math.round(G.modeT * 100) / 100,
+			lv: G.levelNum,
+			tr: G.trans ? [G.trans.from, G.trans.to, G.trans.num, Math.round(G.trans.t * 1000) / 1000] : 0,
+			bn: G.banner ? [G.banner.text, Math.round(G.banner.t * 100) / 100, G.banner.dur, G.banner.color] : 0,
+			P: G.players.map(function (p) { return p ? pack(p, PF) : 0; }),
+			E: G.enemies.map(function (e) { return pack(e, EF).concat([e.bubble ? idOf(e.bubble) : 0]); }),
+			B: G.bubbles.map(function (b) { return pack(b, BF).concat([b.enemy ? idOf(b.enemy) : 0]); }),
+			I: G.items.map(function (it) { return pack(it, IF); }),
+			F: G.fx.map(function (f) { return pack(f, FF); }),
+			S: sfxQueue.splice(0)
+		};
+		return snap;
+	}
+
+	// viewer side
+	const snaps = [];
+	let clockOff = null;
+	let sfxPlayedTo = 0;
+	let lastSnapAt = 0;
+
+	SU.net.onSnap = function (snap) {
+		const now = performance.now();
+		const off = now - snap.hT;
+		// the smallest delay seen is the best guess at the clock difference;
+		// creep upward slowly in case the network gets slower
+		if (clockOff === null || off < clockOff) clockOff = off;
+		else clockOff += (off - clockOff) * 0.002;
+		if (snaps.length && snap.hT <= snaps[snaps.length - 1].hT) {
+			// the host page was reloaded: its clock started over
+			snaps.length = 0;
+			clockOff = off;
+			sfxPlayedTo = 0;
+		}
+		snaps.push(snap);
+		while (snaps.length > 40) snaps.shift();
+		lastSnapAt = now;
+	};
+
+	function mix(a, b, k) {
+		// a and b are the same thing in two snapshots
+		if (!b) return a;
+		const o = {};
+		for (const f in a) {
+			const va = a[f];
+			const vb = b[f];
+			if (LERP[f] && typeof va === 'number' && typeof vb === 'number') {
+				// a jump (wrapping from the floor to the top) shouldn't slide across the screen
+				o[f] = (f === 'x' || f === 'y') && Math.abs(vb - va) > 120 ? va : va + (vb - va) * k;
+			} else {
+				o[f] = va;
+			}
+		}
+		return o;
+	}
+
+	function byId(list, fields) {
+		const m = {};
+		(list || []).forEach(function (a) {
+			const o = unpack(a, fields);
+			o.ref = a[fields.length];
+			m[o._id] = o;
+		});
+		return m;
+	}
+
+	function viewerFrame(now, dt) {
+		G.time += dt;
+		if (!snaps.length) return;
+		const at = now - clockOff - VIEW_DELAY;
+		let i = 0;
+		while (i < snaps.length - 1 && snaps[i + 1].hT <= at) i++;
+		const a = snaps[i];
+		const b = snaps[i + 1];
+		const k = b ? Math.max(0, Math.min(1, (at - a.hT) / (b.hT - a.hT))) : 0;
+
+		// sounds, once each, as their snapshot comes up
+		for (let j = 0; j <= i; j++) {
+			if (snaps[j].hT > sfxPlayedTo) {
+				snaps[j].S.forEach(function (n) { playSfx(n); });
+				sfxPlayedTo = snaps[j].hT;
+			}
+		}
+		// older snapshots aren't needed any more
+		if (i > 2) snaps.splice(0, i - 2);
+
+		if (a.lv !== G.levelNum) {
+			setLevel(a.lv);
+			useLevelArt();
+		}
+		G.mode = a.mode;
+		G.modeT = b ? a.modeT + (b.modeT - a.modeT) * k : a.modeT;
+		G.trans = a.tr ? { from: a.tr[0], to: a.tr[1], num: a.tr[2], t: b && b.tr ? a.tr[3] + (b.tr[3] - a.tr[3]) * k : a.tr[3] } : null;
+		G.banner = a.bn ? { text: a.bn[0], t: a.bn[1] + (b && b.bn && b.bn[0] === a.bn[0] ? (b.bn[1] - a.bn[1]) * k : 0), dur: a.bn[2], color: a.bn[3] } : null;
+
+		G.players = a.P.map(function (pa, slot) {
+			if (!pa) return null;
+			const pb = b && b.P[slot];
+			const p = mix(unpack(pa, PF), pb && pb[1] === pa[1] ? unpack(pb, PF) : null, k);
+			return p;
+		});
+
+		const ea = byId(a.E, EF);
+		const eb = b ? byId(b.E, EF) : {};
+		const ba = byId(a.B, BF);
+		const bb = b ? byId(b.B, BF) : {};
+		const enemies = {};
+		G.enemies = Object.keys(ea).map(function (id) {
+			const e = mix(ea[id], eb[id], k);
+			enemies[id] = e;
+			return e;
+		});
+		G.bubbles = Object.keys(ba).map(function (id) {
+			const bub = mix(ba[id], bb[id], k);
+			bub.enemy = ba[id].ref ? enemies[ba[id].ref] || null : null;
+			if (bub.enemy) bub.enemy.bubble = bub;
+			return bub;
+		});
+		const ia = byId(a.I, IF);
+		const ib = b ? byId(b.I, IF) : {};
+		G.items = Object.keys(ia).map(function (id) { return mix(ia[id], ib[id], k); });
+		G.fx = (a.F || []).map(function (f) {
+			const o = unpack(f, FF);
+			o.t = Math.min(o.dur, o.t + (b ? (b.hT - a.hT) / 1000 * k : 0));
+			return o;
+		});
+	}
+
+	// messages over the top of a viewer TV when the game isn't coming through
+	function drawViewerStatus() {
+		let msg = '';
+		if (SU.net.noRoom) msg = 'No game with the code ' + SU.net.watch + '. Check the code on the main TV.';
+		else if (!SU.net.connected) msg = 'Connecting...';
+		else if (!SU.net.hostHere) msg = 'Waiting for the main TV (code ' + SU.net.watch + ')...';
+		else if (!snaps.length || performance.now() - lastSnapAt > 3000) msg = 'Waiting for the game from the main TV...';
+		if (!msg) return;
+		ctx.save();
+		ctx.setTransform(view.s, 0, 0, view.s, view.ox, view.oy);
+		ctx.fillStyle = 'rgba(6, 18, 25, 0.8)';
+		ctx.fillRect(0, H / 2 - 40, W, 80);
+		outlineText(msg, W / 2, H / 2, 24, '#ffe066');
+		ctx.restore();
+	}
+
 	// ---------- main loop ----------
 
 	let last = performance.now();
 	let acc = 0;
 	const STEP = 1 / 60;
+	let snapAcc = 0;
 	function frame(now) {
-		acc += Math.min(0.1, (now - last) / 1000);
+		const dt = Math.min(0.1, (now - last) / 1000);
 		last = now;
+		pollGamepads();
+		if (VIEWER) {
+			acc += dt;
+			if (acc >= STEP) {
+				acc = acc % STEP;
+				viewerFrame(now, dt);
+				render();
+				drawViewerStatus();
+			}
+			requestAnimationFrame(frame);
+			return;
+		}
+		acc += dt;
 		let stepped = false;
 		while (acc >= STEP) {
 			update(STEP);
@@ -1639,6 +2018,16 @@
 			stepped = true;
 		}
 		if (stepped) render();
+		// send the game to any viewer TVs, 20 times a second
+		if (SU.net.viewers > 0) {
+			snapAcc += dt;
+			if (snapAcc >= SNAP_EVERY) {
+				snapAcc = 0;
+				SU.net.view(buildSnap());
+			}
+		} else {
+			sfxQueue.length = 0;
+		}
 		requestAnimationFrame(frame);
 	}
 
